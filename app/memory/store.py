@@ -34,7 +34,6 @@ def create_memory(db: Session, data: MemoryCreate) -> Memory:
     db.commit()
     db.refresh(memory)
 
-    # Store in FAISS and save index back to DB record
     faiss_idx = add_memory(embedding, memory.id)
     memory.embedding_index = faiss_idx
     db.commit()
@@ -50,7 +49,6 @@ def retrieve_relevant_memories(db: Session, query: str, top_k: int = 5) -> list[
     for result in results:
         memory = db.query(Memory).filter(Memory.id == result["db_memory_id"]).first()
         if memory:
-            # Update access count and recalculate importance score
             memory.access_count += 1
             memory.importance_score = compute_importance_score(
                 memory.access_count,
@@ -65,28 +63,23 @@ def delete_memory_by_id(db: Session, memory_id: int):
     """Delete a memory and rebuild the FAISS index."""
     from app.models import Memory
     
-    # Find the memory
     memory = db.query(Memory).filter(Memory.id == memory_id).first()
     if not memory:
         raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found")
     
-    # Delete from database
     db.delete(memory)
     db.commit()
     
-    # Rebuild FAISS index
     remaining_memories = db.query(Memory).all()
     
-    global memory_manager  # Access the global memory manager
+    global memory_manager  
     
     if remaining_memories:
-        # Rebuild index with remaining memories
         embeddings = [np.frombuffer(m.embedding, dtype=np.float32) for m in remaining_memories]
         embeddings_array = np.array(embeddings).astype('float32')
         memory_manager.index = faiss.IndexFlatL2(embeddings_array.shape[1])
         memory_manager.index.add(embeddings_array)
     else:
-        # Reset to empty index if no memories remain
         memory_manager.index = faiss.IndexFlatL2(384)
     
     return {"message": f"Memory {memory_id} deleted successfully", "remaining_count": len(remaining_memories)}

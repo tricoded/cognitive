@@ -11,13 +11,12 @@ from app.memory.store import (
     create_memory, 
     retrieve_relevant_memories, 
     get_all_memories,
-    delete_memory_by_id  # NEW: Import delete function
+    delete_memory_by_id 
 )
 from app.workflow.classifier import create_task, get_prioritized_tasks, delete_task
 from app.llm.agent import generate_daily_plan, query_with_memory
 from typing import Optional
 
-# Create all tables on startup
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(

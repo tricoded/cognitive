@@ -60,7 +60,7 @@ def get_prioritized_tasks(db: Session) -> dict:
 
     return grouped
 
-# ── NEW: Update task status ──────────────────────────────────────────────────
+# ── Update task status ──────────────────────────────────────────────────
 def update_task_status(db: Session, task_id: int, new_status: str) -> Task | None:
     """
     Updates the status of a task by ID.
@@ -74,7 +74,7 @@ def update_task_status(db: Session, task_id: int, new_status: str) -> Task | Non
     db.refresh(task)
     return task
 
-# ── NEW: Delete a task ───────────────────────────────────────────────────────
+# ── Delete a task ───────────────────────────────────────────────────────
 def delete_task(db: Session, task_id: int) -> bool:
     """
     Deletes a task by ID.

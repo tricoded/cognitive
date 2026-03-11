@@ -4,13 +4,12 @@ import os
 import pickle
 
 FAISS_INDEX_PATH = "faiss_index.bin"
-FAISS_MAP_PATH = "faiss_map.pkl"  # maps FAISS index -> memory DB id
+FAISS_MAP_PATH = "faiss_map.pkl"  
 
-# Dimension from all-MiniLM-L6-v2
 EMBEDDING_DIM = 384
 
 _index = None
-_id_map: list[int] = []  # position in list = FAISS idx, value = DB memory id
+_id_map: list[int] = []  
 
 def _get_index() -> faiss.IndexFlatIP:
     global _index
@@ -18,7 +17,6 @@ def _get_index() -> faiss.IndexFlatIP:
         if os.path.exists(FAISS_INDEX_PATH):
             _index = faiss.read_index(FAISS_INDEX_PATH)
         else:
-            # Inner product on normalized vectors = cosine similarity
             _index = faiss.IndexFlatIP(EMBEDDING_DIM)
     return _index
 

@@ -29,14 +29,6 @@ services:
     networks:
       - cognitive-network
 
-  # Frontend (we'll add this in Phase 3)
-  # frontend:
-  #   build: ./frontend
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     - api
-
 volumes:
   ollama-data:
 

@@ -4,7 +4,6 @@ import os
 
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
-# Loaded once at startup — PyTorch model under the hood
 _model = None
 
 def get_model() -> SentenceTransformer:

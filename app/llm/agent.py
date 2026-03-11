@@ -36,14 +36,12 @@ def generate_daily_plan(db: Session) -> str:
     """Generate daily plan using Ollama"""
     context = build_day_context(db)
     
-    # Build the full prompt with system context
     full_prompt = f"""{SYSTEM_PROMPT}
 
 Generate my daily plan based on this context:
 
 {context}"""
     
-    # Use Ollama instead of OpenAI
     return get_ollama_response(full_prompt, model="llama3.2")
 
 def query_with_memory(db: Session, user_query: str) -> str:
@@ -58,7 +56,6 @@ def query_with_memory(db: Session, user_query: str) -> str:
         for m in relevant_memories
     ]) or "No relevant memories found."
 
-    # Build the full prompt with system context
     full_prompt = f"""{SYSTEM_PROMPT}
 
 User query: {user_query}
@@ -68,5 +65,4 @@ Relevant memories from user's history:
 
 Answer the query using the memories as context where relevant."""
 
-    # Use Ollama instead of OpenAI
     return get_ollama_response(full_prompt, model="llama3.2")
