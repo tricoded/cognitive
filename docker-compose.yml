@@ -1,0 +1,45 @@
+services:
+  # API Backend
+  api:
+    build: .
+    container_name: cognitive-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./app:/app/app
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - DATABASE_URL=sqlite:///data/cognitive.db
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    networks:
+      - cognitive-network
+
+    # Ollama LLM Server
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cognitive-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - cognitive-network
+
+  # Frontend (we'll add this in Phase 3)
+  # frontend:
+  #   build: ./frontend
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - api
+
+volumes:
+  ollama-data:
+
+networks:
+  cognitive-network:
+    driver: bridge

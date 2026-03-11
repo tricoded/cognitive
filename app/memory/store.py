@@ -1,0 +1,96 @@
+from sqlalchemy.orm import Session
+from app.models import Memory
+from app.schemas import MemoryCreate
+from app.memory.embedder import embed_text
+from app.memory.retriever import add_memory, search_similar
+from datetime import datetime
+import math
+import numpy as np
+import faiss
+from fastapi import HTTPException
+
+def compute_importance_score(access_count: int, created_at: datetime) -> float:
+    """
+    importance = 0.4 * recency + 0.6 * frequency
+    Recency decays over time (days since creation).
+    Frequency grows with access count.
+    """
+    days_old = max((datetime.utcnow() - created_at).days, 0)
+    recency = math.exp(-0.1 * days_old)         # exponential decay
+    frequency = 1 - math.exp(-0.3 * access_count)  # grows with access
+
+    return round(0.4 * recency + 0.6 * frequency, 4)
+
+def create_memory(db: Session, data: MemoryCreate) -> Memory:
+    embedding = embed_text(data.content)
+
+    memory = Memory(
+        content=data.content,
+        category=data.category,
+        importance_score=0.5,
+        access_count=0
+    )
+    db.add(memory)
+    db.commit()
+    db.refresh(memory)
+
+    # Store in FAISS and save index back to DB record
+    faiss_idx = add_memory(embedding, memory.id)
+    memory.embedding_index = faiss_idx
+    db.commit()
+    db.refresh(memory)
+
+    return memory
+
+def retrieve_relevant_memories(db: Session, query: str, top_k: int = 5) -> list[Memory]:
+    embedding = embed_text(query)
+    results = search_similar(embedding, top_k=top_k)
+
+    memories = []
+    for result in results:
+        memory = db.query(Memory).filter(Memory.id == result["db_memory_id"]).first()
+        if memory:
+            # Update access count and recalculate importance score
+            memory.access_count += 1
+            memory.importance_score = compute_importance_score(
+                memory.access_count,
+                memory.created_at
+            )
+            db.commit()
+            memories.append(memory)
+
+    return memories
+
+def delete_memory_by_id(db: Session, memory_id: int):
+    """Delete a memory and rebuild the FAISS index."""
+    from app.models import Memory
+    
+    # Find the memory
+    memory = db.query(Memory).filter(Memory.id == memory_id).first()
+    if not memory:
+        raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found")
+    
+    # Delete from database
+    db.delete(memory)
+    db.commit()
+    
+    # Rebuild FAISS index
+    remaining_memories = db.query(Memory).all()
+    
+    global memory_manager  # Access the global memory manager
+    
+    if remaining_memories:
+        # Rebuild index with remaining memories
+        embeddings = [np.frombuffer(m.embedding, dtype=np.float32) for m in remaining_memories]
+        embeddings_array = np.array(embeddings).astype('float32')
+        memory_manager.index = faiss.IndexFlatL2(embeddings_array.shape[1])
+        memory_manager.index.add(embeddings_array)
+    else:
+        # Reset to empty index if no memories remain
+        memory_manager.index = faiss.IndexFlatL2(384)
+    
+    return {"message": f"Memory {memory_id} deleted successfully", "remaining_count": len(remaining_memories)}
+ 
+def get_all_memories(db: Session) -> list[Memory]:
+    return db.query(Memory).order_by(Memory.importance_score.desc()).all()
+
