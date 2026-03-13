@@ -1,0 +1,85 @@
+## Navigate to Project & Activate Virtual Environment
+
+# Go to project directory
+cd /c/sideprojects/cognitive
+
+# Activate virtual environment
+source venv/Scripts/activate
+
+# You should see (venv) before your prompt
+
+
+## Start All Docker Containers
+
+# Start everything in detached mode
+docker-compose up -d
+
+# Wait 10 seconds for containers to fully start
+sleep 10
+
+Verify Everything is Running
+# Check all containers are up
+docker ps
+
+# You should see 3 containers:
+# - cognitive-api (backend)
+# - cognitive-frontend (Streamlit)
+# - cognitive-ollama (LLM)
+
+Check Health of Services
+# Test backend API
+curl http://localhost:8000/
+
+# Test Ollama
+curl http://localhost:11434/api/tags
+
+# Both should return JSON responses
+
+## Open Frontend in Browser
+# Option 1: Auto-open in default browser
+start http://localhost:8501
+
+# Option 2: Just copy-paste this URL
+# http://localhost:8501
+
+Monitor Logs
+Terminal 2 - Backend Logs
+cd /c/sideprojects/cognitive
+docker logs -f cognitive-api
+
+Terminal 3 - Frontend Logs
+cd /c/sideprojects/cognitive
+docker logs -f cognitive-frontend
+
+Shutdown
+# Stop all containers
+docker-compose down
+
+# Deactivate virtual environment
+deactivate
+
+Restart
+# Restart everything
+docker-compose restart
+
+# Or restart specific service
+docker-compose restart frontend
+docker-compose restart api
+
+Troubleshooting
+# Check what's using port 8501
+netstat -ano | grep 8501
+
+# Force rebuild if code changes don't reflect
+docker-compose up --build -d
+
+# View recent errors
+docker-compose logs --tail=50 api
+docker-compose logs --tail=50 frontend
+
+# Nuclear option - complete reset
+docker-compose down -v
+docker-compose up --build -d
+
+chmod +x start.sh
+./start.sh

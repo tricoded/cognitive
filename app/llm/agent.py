@@ -46,9 +46,22 @@ Generate my daily plan based on this context:
 
 def query_with_memory(db: Session, user_query: str) -> str:
     """
-    Retrieves relevant memories via FAISS,
+    Retrieves relevant memories via FAISS,      
     injects them as context, then calls Ollama LLM.
     """
+    # Detect casual greetings
+    casual_greetings = ["hi", "hello", "hey", "yo", "sup", "what's up", "whats up", "howdy"]
+    if user_query.strip().lower() in casual_greetings:
+        return """Hey! 👋 I'm your cognitive assistant. I can help you:
+
+• **Plan your day** based on tasks and energy levels
+• **Remember important info** using semantic memory
+• **Manage tasks** and prioritize effectively
+• **Answer questions** using your stored memories
+
+What would you like help with?"""
+    
+    # Normal query processing (keep existing code)
     relevant_memories = retrieve_relevant_memories(db, user_query, top_k=5)
 
     memory_context = "\n".join([

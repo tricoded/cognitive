@@ -41,6 +41,7 @@ class TaskResponse(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
+    session_id: Optional[str] = "default"
     top_k: int = 5
 
 class PlanRequest(BaseModel):

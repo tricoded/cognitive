@@ -59,6 +59,28 @@ def retrieve_relevant_memories(db: Session, query: str, top_k: int = 5) -> list[
 
     return memories
 
+def store_memory(db: Session, content: str, category: str, metadata: dict = None) -> Memory:
+    """
+    Simple wrapper to store a memory without needing MemoryCreate schema.
+    Used for quick storage like user profiles.
+    """
+    from app.schemas import MemoryCreate
+    
+    # Create the schema object
+    memory_data = MemoryCreate(
+        content=content,
+        category=category
+    )
+    
+    # Use existing create_memory function
+    memory = create_memory(db, memory_data)
+    
+    # Note: metadata parameter exists but Memory model doesn't have metadata field
+    # If you need metadata, add it to your Memory model first
+    
+    return memory
+
+
 def delete_memory_by_id(db: Session, memory_id: int):
     """Delete a memory and rebuild the FAISS index."""
     from app.models import Memory
