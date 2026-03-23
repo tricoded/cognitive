@@ -29,7 +29,7 @@ def create_task(db: Session, data: TaskCreate) -> Task:
         urgency=data.urgency,
         importance=data.importance,
         quadrant=quadrant,
-        deadline=data.deadline,
+        due_date=data.due_date,
         status="pending"
     )
     db.add(task)

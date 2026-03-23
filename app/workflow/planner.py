@@ -26,7 +26,7 @@ def build_day_context(db: Session) -> str:
         if task_list:
             lines.append(f"\n{label}:")
             for t in task_list:
-                deadline_str = f" | Deadline: {t.deadline}" if t.deadline else ""
+                deadline_str = f" | Deadline: {t.due_date}" if t.due_date else ""
                 lines.append(f"  - {t.title}{deadline_str}")
 
     lines.append("\n=== ACTIVE MEMORIES (by importance) ===")
