@@ -1,278 +1,185 @@
-import os
-import json
-import logging
-import numpy as np
-import joblib
+# app/ml/task_predictor.py
 
-from datetime import datetime
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error
-from typing import Dict, List, Optional
+import pickle
+import logging
+from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-MODEL_PATH    = "models/task_predictor.pkl"
-ENCODER_PATH  = "models/task_encoders.pkl"
-META_PATH     = "models/training_meta.json"
-MIN_SAMPLES   = 10
+MODEL_PATH = Path("app/ml/models/time_predictor.pkl")
 
-# Safe known labels so encoder never crashes on unseen values
-KNOWN_PRIORITIES  = ["Low", "Medium", "High", "Critical"]
-KNOWN_CATEGORIES  = [
-    "Work", "Personal", "Health", "Learning",
-    "Finance", "Other", "Creative", "Admin"
-]
+# Feature encoding maps
+PRIORITY_MAP = {"Critical": 5, "High": 4, "Medium": 3, "Low": 2, "Overdue": 6}
+CATEGORY_MAP = {
+    "Development": 5,
+    "Work":        4,
+    "Learning":    3,
+    "Personal":    2,
+    "Finance":     1,
+}
 
 
 class TaskDifficultyPredictor:
     """
-    ML model to predict task completion time based on historical data.
-    Upgraded: persistent encoders, MAE tracking, graceful fallback.
+    Predicts how long a task will actually take (in minutes).
+
+    Training:  GradientBoostingRegressor on completed tasks with actual_minutes.
+    Fallback:  Returns task.estimated_minutes if not trained, or 60 if neither.
+    Auto-trains: After every 5th task completion via retrain_if_ready().
     """
 
     def __init__(self):
-        self.model            = RandomForestRegressor(
-            n_estimators=100,
-            max_depth=6,
-            min_samples_leaf=2,
-            random_state=42
-        )
-        self.priority_encoder = LabelEncoder()
-        self.category_encoder = LabelEncoder()
-        self.is_trained       = False
+        self.model      = None
+        self.is_trained = False
+        self._load()
 
-        # Pre-fit encoders with known labels so they never crash
-        self.priority_encoder.fit(KNOWN_PRIORITIES)
-        self.category_encoder.fit(KNOWN_CATEGORIES)
-
-        # Try to load existing saved model on startup
-        self._load_if_exists()
-
-    # ──────────────────────────────────────────────────────────
-    #  INTERNAL HELPERS
-    # ──────────────────────────────────────────────────────────
-
-    def _safe_priority_encode(self, priority: str) -> int:
-        """Encode priority; fall back to 'Medium' if unseen."""
-        if priority not in self.priority_encoder.classes_:
-            priority = "Medium"
-        return int(self.priority_encoder.transform([priority])[0])
-
-    def _safe_category_encode(self, category: str) -> int:
-        """Encode category; fall back to 'Other' if unseen."""
-        if category not in self.category_encoder.classes_:
-            category = "Other"
-        return int(self.category_encoder.transform([category])[0])
-
-    def _load_if_exists(self):
-        """Load saved model + encoders from disk if available."""
-        if os.path.exists(MODEL_PATH) and os.path.exists(ENCODER_PATH):
+    # ── Persistence ────────────────────────────────────────────────────
+    def _load(self):
+        if MODEL_PATH.exists():
             try:
-                self.model            = joblib.load(MODEL_PATH)
-                encoders              = joblib.load(ENCODER_PATH)
-                self.priority_encoder = encoders["priority"]
-                self.category_encoder = encoders["category"]
-                self.is_trained       = True
-                logger.info("ML model loaded from disk.")
+                with open(MODEL_PATH, "rb") as f:
+                    self.model = pickle.load(f)
+                self.is_trained = True
+                logger.info("[Predictor] Model loaded from disk.")
             except Exception as e:
-                logger.warning(f"Could not load saved model: {e}")
+                logger.warning(f"[Predictor] Failed to load model: {e}")
 
-    # ──────────────────────────────────────────────────────────
-    #  FEATURE ENGINEERING
-    # ──────────────────────────────────────────────────────────
+    def _save(self):
+        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(MODEL_PATH, "wb") as f:
+            pickle.dump(self.model, f)
 
-    def prepare_features(self, task_data: List[Dict]) -> np.ndarray:
-        """Extract numeric features from task dicts."""
-        features = []
-        for task in task_data:
-            features.append([
-                self._safe_priority_encode(task.get("priority", "Medium")),
-                self._safe_category_encode(task.get("category", "Other")),
-                float(task.get("estimated_minutes", 60)),
-                float(task.get("distraction_count", 0)),
-                float(task.get("energy_level_start", 5)),
-            ])
-        return np.array(features)
+    # ── Feature Engineering ─────────────────────────────────────────────
+    def _featurize(self, task) -> list[float]:
+        """
+        Convert a task ORM object into a numeric feature vector.
+        Features: [title_word_count, priority_score, category_score,
+                   hour_created, has_deadline, days_until_due]
+        """
+        title_words  = len((task.title or "").split())
+        priority     = PRIORITY_MAP.get(task.priority or "Medium", 3)
+        category     = CATEGORY_MAP.get(task.category or "Work", 4)
+        hour_created = task.created_at.hour if task.created_at else 9
+        has_deadline = 1 if task.due_date else 0
 
-    @staticmethod
-    def feature_names() -> List[str]:
+        # Days until due (0 if overdue, 30 if no deadline)
+        days_until_due = 30
+        if task.due_date:
+            from datetime import date
+            due = task.due_date.date() if hasattr(task.due_date, "date") else task.due_date
+            days_until_due = max(0, (due - date.today()).days)
+
         return [
-            "priority",
-            "category",
-            "estimated_minutes",
-            "distraction_count",
-            "energy_level_start"
+            title_words,
+            priority,
+            category,
+            hour_created,
+            has_deadline,
+            days_until_due,
         ]
 
-    # ──────────────────────────────────────────────────────────
-    #  TRAINING
-    # ──────────────────────────────────────────────────────────
-
-    def train(self, historical_tasks: List[Dict]) -> Dict:
+    # ── Training ────────────────────────────────────────────────────────
+    def train(self, completed_tasks: list) -> bool:
         """
-        Train on completed task history.
-        Returns a dict with status and metrics.
+        Train on completed tasks that have actual_minutes recorded.
+        Returns True if training succeeded, False if not enough data.
         """
-        if len(historical_tasks) < MIN_SAMPLES:
-            msg = (
-                f"Need at least {MIN_SAMPLES} completed tasks. "
-                f"Currently have {len(historical_tasks)}."
-            )
-            logger.warning(msg)
-            return {
-                "status": "skipped",
-                "reason": msg,
-                "ml_enabled": False
-            }
+        try:
+            from sklearn.ensemble import GradientBoostingRegressor
+            from sklearn.model_selection import cross_val_score
+            import numpy as np
+        except ImportError:
+            logger.error("[Predictor] scikit-learn not installed. Run: pip install scikit-learn")
+            return False
 
-        # Re-fit encoders to include any new labels seen in data
-        all_priorities = list(set(
-            KNOWN_PRIORITIES + [t.get("priority", "Medium") for t in historical_tasks]
-        ))
-        all_categories = list(set(
-            KNOWN_CATEGORIES + [t.get("category", "Other") for t in historical_tasks]
-        ))
-        self.priority_encoder.fit(all_priorities)
-        self.category_encoder.fit(all_categories)
+        # Only train on tasks with real time data
+        trainable = [
+            t for t in completed_tasks
+            if t.actual_minutes and t.actual_minutes > 0
+        ]
 
-        X = self.prepare_features(historical_tasks)
-        y = np.array([float(t["actual_minutes"]) for t in historical_tasks])
+        if len(trainable) < 5:
+            logger.info(f"[Predictor] Not enough data: {len(trainable)}/5 tasks needed.")
+            return False
 
-        # Split only if we have enough data
-        if len(historical_tasks) >= 20:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.2, random_state=42
-            )
-        else:
-            X_train, X_test, y_train, y_test = X, X, y, y
+        X = [self._featurize(t) for t in trainable]
+        y = [float(t.actual_minutes) for t in trainable]
 
-        self.model.fit(X_train, y_train)
+        self.model = GradientBoostingRegressor(
+            n_estimators  = 100,
+            max_depth     = 3,
+            learning_rate = 0.1,
+            subsample     = 0.8,
+            random_state  = 42,
+        )
+        self.model.fit(X, y)
+        self._save()
         self.is_trained = True
 
-        # Metrics
-        y_pred = self.model.predict(X_test)
-        mae    = round(float(mean_absolute_error(y_test, y_pred)), 2)
+        # Log cross-val MAE if enough data
+        if len(trainable) >= 10:
+            scores = cross_val_score(
+                self.model, X, y,
+                cv=min(5, len(trainable)),
+                scoring="neg_mean_absolute_error",
+            )
+            mae = -scores.mean()
+            logger.info(f"[Predictor] Trained on {len(trainable)} tasks. CV MAE: {mae:.1f} min")
+        else:
+            logger.info(f"[Predictor] Trained on {len(trainable)} tasks.")
 
-        # Persist model + encoders
-        os.makedirs("models", exist_ok=True)
-        joblib.dump(self.model, MODEL_PATH)
-        joblib.dump(
-            {"priority": self.priority_encoder, "category": self.category_encoder},
-            ENCODER_PATH
+        return True
+
+    # ── Prediction ──────────────────────────────────────────────────────
+    def predict(self, task) -> int:
+        """
+        Returns predicted minutes for a single task.
+        Falls back to estimated_minutes → 60 if model not ready.
+        """
+        if not self.is_trained or self.model is None:
+            return task.estimated_minutes or 60
+
+        try:
+            features = self._featurize(task)
+            raw      = self.model.predict([features])[0]
+            # Round to nearest 5 minutes, minimum 5
+            return max(5, int(round(raw / 5) * 5))
+        except Exception as e:
+            logger.warning(f"[Predictor] Prediction failed: {e}")
+            return task.estimated_minutes or 60
+
+    # ── Auto-retrain trigger ─────────────────────────────────────────────
+    def retrain_if_ready(self, db) -> bool:
+        """
+        Called after every task completion.
+        Retrains automatically when we have 5, 10, 20, 50+ completions
+        (threshold-based so it doesn't retrain on every single task).
+        """
+        from app.models import Task
+
+        completed = db.query(Task).filter(
+            Task.status == "completed",
+            Task.actual_minutes.isnot(None),
+        ).all()
+
+        count = len(completed)
+
+        # Retrain at: 5, 10, 20, then every 10 after that
+        thresholds = {5, 10, 20}
+        should_retrain = (
+            count in thresholds or
+            (count >= 20 and count % 10 == 0)
         )
 
-        # Persist metadata
-        meta = {
-            "trained_at":   datetime.utcnow().isoformat(),
-            "num_samples":  len(historical_tasks),
-            "mae_minutes":  mae,
-            "ml_enabled":   True
-        }
-        with open(META_PATH, "w") as f:
-            json.dump(meta, f, indent=2)
+        if should_retrain:
+            success = self.train(completed)
+            if success:
+                logger.info(f"[Predictor] Auto-retrained at {count} completions.")
+            return success
 
-        logger.info(f"Model trained. Samples: {len(historical_tasks)}, MAE: {mae} min")
+        return False
 
-        return {
-            "status":       "trained",
-            "samples_used": len(historical_tasks),
-            "mae_minutes":  mae,
-            "trained_at":   meta["trained_at"],
-            "ml_enabled":   True
-        }
 
-    # ──────────────────────────────────────────────────────────
-    #  PREDICTION
-    # ──────────────────────────────────────────────────────────
-
-    def predict_duration(self, task: Dict) -> Dict:
-        """
-        Predict actual duration for a new task.
-        Returns a rich dict (not just an int) with confidence + insight.
-        """
-        estimated = task.get("estimated_minutes", 60)
-
-        if not self.is_trained:
-            # Rule-based fallback
-            energy     = task.get("energy_level_start", 5)
-            multiplier = 1.0 + (0.05 * (10 - energy))
-            predicted  = round(estimated * multiplier)
-            return {
-                "predicted_actual_minutes": predicted,
-                "confidence":  "low",
-                "ml_enabled":  False,
-                "method":      "rule_based_fallback",
-                "insight": (
-                    "Complete more tasks to unlock ML predictions. "
-                    f"Rule-based estimate: ~{predicted} min."
-                )
-            }
-
-        X         = self.prepare_features([task])
-        predicted = round(float(self.model.predict(X)[0]), 1)
-        predicted = max(15.0, predicted)  # Minimum 15 min
-
-        # Confidence from tree variance
-        all_preds = np.array([
-            tree.predict(X)[0] for tree in self.model.estimators_
-        ])
-        std_dev = round(float(np.std(all_preds)), 1)
-
-        if std_dev < 3:
-            confidence = "high"
-        elif std_dev < 8:
-            confidence = "medium"
-        else:
-            confidence = "low"
-
-        # Human insight
-        diff = predicted - estimated
-        if diff > 2:
-            insight = (
-                f"Based on your history, this will likely take "
-                f"~{round(diff)} min longer than estimated."
-            )
-        elif diff < -2:
-            insight = (
-                f"Based on your history, you may finish "
-                f"~{abs(round(diff))} min ahead of estimate."
-            )
-        else:
-            insight = "Your estimate looks accurate based on past performance."
-
-        return {
-            "predicted_actual_minutes": predicted,
-            "confidence":              confidence,
-            "std_dev_minutes":         std_dev,
-            "ml_enabled":              True,
-            "method":                  "random_forest",
-            "insight":                 insight
-        }
-
-    # ──────────────────────────────────────────────────────────
-    #  STATUS & EXPLAINABILITY
-    # ──────────────────────────────────────────────────────────
-
-    def get_status(self) -> Dict:
-        """Return current model status and training metadata."""
-        if not os.path.exists(META_PATH):
-            return {
-                "ml_enabled": False,
-                "reason": "No model trained yet. POST /ml/train first."
-            }
-        with open(META_PATH) as f:
-            return json.load(f)
-
-    def get_feature_importance(self) -> Optional[Dict]:
-        """Return feature importances sorted by impact."""
-        if not self.is_trained:
-            return None
-        importance = dict(zip(
-            self.feature_names(),
-            [round(float(i), 4) for i in self.model.feature_importances_]
-        ))
-        return dict(
-            sorted(importance.items(), key=lambda x: x[1], reverse=True)
-        )
+# ── Singleton ────────────────────────────────────────────────────────────────
+predictor = TaskDifficultyPredictor()

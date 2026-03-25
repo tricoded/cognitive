@@ -9,7 +9,7 @@ import asyncio
 import os
 from sqlalchemy.orm import Session
 from app.database import engine, get_db, Base
-from typing import Union, List, Optional, Dict
+from typing import Union, List, Optional, Dict, Any
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 from app.models import Profile, Memory, SkillEvidence, Task, Note
@@ -23,7 +23,12 @@ from app.memory.store import (
     get_all_memories,
     delete_memory_by_id
 )
-from app.llm.agent import generate_daily_plan, query_with_memory
+from app.llm.agent import (
+    generate_daily_plan, 
+    query_with_memory, 
+    auto_archive_completed, 
+    daily_priority_refresh,
+)
 from app.analytics.productivity import (
     get_estimation_analytics,
     get_productivity_by_hour,
@@ -60,6 +65,21 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     Base.metadata.create_all(bind=engine)
     logger.info("Database initialized")
+
+    # ── AUTO ARCHIVE + PRIORITY REFRESH ──────────────────────
+    try:
+        db = next(get_db())
+        try:
+            archived   = auto_archive_completed(db)   # only completed tasks 24h+ old
+            escalated  = daily_priority_refresh(db)   # bump priorities by deadline
+            if archived:
+                logger.info(f"[STARTUP] Archived {archived} old completed tasks")
+            if escalated:
+                logger.info(f"[STARTUP] Escalated {len(escalated)} task priorities")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[STARTUP] Maintenance tasks failed (non-fatal): {e}")
 
     # ── OLLAMA WARMUP ──
     logger.info("[WARMUP] Pre-warming Ollama mistral model...")
@@ -416,6 +436,8 @@ class SmartChatRequest(BaseModel):
     message: str
     session_id: str = "default"
     conversation_history: Optional[List[Dict]] = []
+    session_state: dict = {}
+    user_id: int = 0
 
 @limiter.limit("30/minute")
 @app.post("/ai/chat")
@@ -435,7 +457,9 @@ def smart_chat_endpoint(
 
     result = smart_chat(
         message=request.message,
+        user_id=request.user_id,
         db=db,
+        session_state=request.session_state,
         conversation_history=request.conversation_history or []
     )
     return result

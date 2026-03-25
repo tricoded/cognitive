@@ -1,8 +1,7 @@
 import os
 from pathlib import Path
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base
 
 # ── Resolve DB path relative to THIS file (always correct, any OS) ────────
 BASE_DIR = Path(__file__).resolve().parent.parent   # → C:\sideprojects\cognitive
