@@ -1,0 +1,56 @@
+{
+  "has_enough_data": true,
+  "completed_count": 17,
+  "last_updated": "2026-03-25T18:29:24.994916",
+  "peak_hour": 4,
+  "hour_distribution": {
+    "2": 4,
+    "4": 5,
+    "9": 5,
+    "10": 1,
+    "13": 1,
+    "15": 1
+  },
+  "best_day": "Tuesday",
+  "best_day_index": 1,
+  "day_distribution": {
+    "Tuesday": 14,
+    "Wednesday": 3
+  },
+  "avg_estimate_error_min": 331.6,
+  "mae_minutes": 345.9,
+  "tends_to": "underestimate",
+  "estimate_correction_factor": 8.268,
+  "category_counts": {
+    "Work": 7,
+    "Personal": 5,
+    "Development": 4,
+    "Learning": 1
+  },
+  "category_time_mins": {
+    "Work": 1995,
+    "Personal": 1318,
+    "Development": 588,
+    "Learning": 422
+  },
+  "top_category": "Work",
+  "top_time_category": "Work",
+  "avg_task_duration_mins": 377.2,
+  "recent_velocity": 1.21,
+  "active_days_last_14": 2,
+  "recent_completed_count": 17,
+  "completed_by_priority": {
+    "Critical": 8,
+    "High": 4,
+    "Medium": 4,
+    "Low": 1
+  },
+  "avg_completion_delay_hours": 4.9,
+  "procrastination_score": "low",
+  "duration_preference": "long (90min+)",
+  "duration_breakdown": {
+    "quick (\u226430min)": 2,
+    "medium (31-90min)": 6,
+    "long (90min+)": 9
+  }
+}

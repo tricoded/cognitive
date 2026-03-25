@@ -1,0 +1,17 @@
+{
+  "entries": [
+    {
+      "prompt_id": 0,
+      "date": "2026-03-25",
+      "completed": true,
+      "response": "the quick brown fox jumped over the lazy dog",
+      "rating": 3,
+      "time_spent": 1,
+      "completed_at": "2026-03-25T16:53:59.429082"
+    }
+  ],
+  "category_scores": {},
+  "streak": 1,
+  "last_date": "2026-03-25",
+  "total_completed": 1
+}

@@ -77,3 +77,15 @@ class Note(Base):
     tags = Column(Text, default="[]")  # stored as JSON string
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class AIUsageLog(Base):
+    __tablename__ = "ai_usage_logs"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    tool_name     = Column(String(100), nullable=False)   # "ChatGPT", "Copilot", etc.
+    category      = Column(String(50),  nullable=False)   # "Writing", "Coding", etc.
+    duration_mins = Column(Integer,     nullable=False)   # how long used
+    quality       = Column(String(20),  default="active") # "active" | "passive"
+    notes         = Column(Text,        nullable=True)
+    used_at       = Column(DateTime,    default=datetime.utcnow)
+    created_at    = Column(DateTime,    default=datetime.utcnow)

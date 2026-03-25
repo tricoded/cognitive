@@ -12,7 +12,7 @@ from app.database import engine, get_db, Base
 from typing import Union, List, Optional, Dict, Any
 from pydantic import BaseModel
 from datetime import datetime, timedelta
-from app.models import Profile, Memory, SkillEvidence, Task, Note
+from app.models import Profile, Memory, SkillEvidence, Task, Note, AIUsageLog
 from app.schemas import (
     MemoryCreate, MemoryResponse,
     QueryRequest,
@@ -41,7 +41,8 @@ from app.websocket.manager import manager
 from app.cache.redis_cache import cache
 from app.middleware.rate_limit import limiter, _rate_limit_exceeded_handler, RateLimitExceeded
 from app.schemas import PredictRequest, MLTrainResponse
- 
+from app.routers import ai_usage, tasks
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 predictor = TaskDifficultyPredictor()
@@ -119,12 +120,11 @@ app.add_middleware(
 )
 
 # ==================== ROUTERS (if you have them) ====================
-# Uncomment if you have these files:
-# from app.routers import tasks, chat, memory
-# app.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
-# app.include_router(chat.router, prefix="/chat", tags=["chat"])
-# app.include_router(memory.router, prefix="/memory", tags=["memory"])
-# app.include_router(notes.router, prefix="/notes", tags=["notes"])
+app.include_router(ai_usage.router)
+app.include_router(tasks.router)
+# app.include_router(chat.router)
+# app.include_router(profile.router)
+# app.include_router(notes.router)
 
 # ==================== WEBSOCKET ENDPOINT ====================
 @app.websocket("/ws/{user_id}")
