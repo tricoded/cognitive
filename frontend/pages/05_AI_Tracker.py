@@ -69,18 +69,43 @@ st.markdown(
 st.divider()
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  LOG NEW SESSION
+#  ACTIVE SESSIONS (from extension)
 # ─────────────────────────────────────────────────────────────────────────────
-with st.expander("➕ Log an AI Session", expanded=len(today_logs) == 0):
+st.markdown("### 🟢 Active Sessions (Not Yet Logged)")
+st.caption("These sessions are being tracked by your extension but haven't been saved to the database yet.")
+st.info("💡 Active sessions will auto-log after 30 minutes or when you close the tab. Click 'Save & View Sessions' in the extension popup to force-save them now.")
+
+st.divider()
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  LOG NEW SESSION (with URL param pre-fill support)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Check if session data passed via URL
+query_params = st.query_params
+prefill_tool = query_params.get("tool", None)
+prefill_duration = query_params.get("duration", None)
+prefill_messages = query_params.get("messages", None)
+
+# Show info banner if auto-detected
+if prefill_tool:
+    st.info(f"📥 Auto-detected session: **{prefill_tool}** ({prefill_duration}min, {prefill_messages} messages)")
+
+# Determine default values
+default_tool_idx = TOOLS.index(prefill_tool) if prefill_tool and prefill_tool in TOOLS else 0
+default_duration = int(prefill_duration) if prefill_duration and prefill_duration.isdigit() else 30
+default_notes = f"Auto-tracked from extension · {prefill_messages} messages" if prefill_messages else ""
+
+with st.expander("➕ Log an AI Session", expanded=(len(today_logs) == 0 or bool(prefill_tool))):
     st.markdown("#### Log what you used AI for right now")
 
     lc1, lc2 = st.columns(2)
     with lc1:
-        tool     = st.selectbox("🤖 AI Tool",       TOOLS,       key="log_tool")
-        category = st.selectbox("📁 Category",      CATEGORIES,  key="log_cat")
+        tool = st.selectbox("🤖 AI Tool", TOOLS, index=default_tool_idx, key="log_tool")
+        category = st.selectbox("📁 Category", CATEGORIES, key="log_cat")
     with lc2:
-        duration = st.slider("⏱️ Duration (minutes)", 5, 240, 30, step=5, key="log_dur")
-        quality  = st.radio(
+        duration = st.slider("⏱️ Duration (minutes)", 5, 240, default_duration, step=5, key="log_dur")
+        quality = st.radio(
             "🧠 How did you use it?",
             list(QUALITY_OPTIONS.keys()),
             format_func=lambda k: QUALITY_OPTIONS[k],
@@ -88,8 +113,8 @@ with st.expander("➕ Log an AI Session", expanded=len(today_logs) == 0):
             horizontal=True,
         )
 
-    notes = st.text_area("📝 Notes (optional)", placeholder="What were you working on?",
-                         height=80, key="log_notes")
+    notes = st.text_area("📝 Notes (optional)", value=default_notes,
+                         placeholder="What were you working on?", height=80, key="log_notes")
 
     if st.button("✅ Log Session", use_container_width=True, type="primary"):
         payload = {
@@ -151,10 +176,8 @@ def render_stats(days: int):
     with col_left:
         st.markdown("#### 📅 Daily Usage")
         if by_day:
-            import streamlit as _st
             max_val = max(by_day.values()) if by_day else 1
-            for day_lbl, mins in sorted(by_day.items(),
-                                        key=lambda x: x[0]):
+            for day_lbl, mins in sorted(by_day.items(), key=lambda x: x[0]):
                 bar_w = max(2, int(mins / max_val * 100))
                 st.markdown(
                     f"""<div style="display:flex; align-items:center; gap:8px;
@@ -195,9 +218,7 @@ def render_stats(days: int):
     st.markdown("#### 🤖 By Tool")
     if by_tool:
         tool_cols = st.columns(min(len(by_tool), 4))
-        for i, (tool_name, mins) in enumerate(
-            sorted(by_tool.items(), key=lambda x: -x[1])[:4]
-        ):
+        for i, (tool_name, mins) in enumerate(sorted(by_tool.items(), key=lambda x: -x[1])[:4]):
             with tool_cols[i % 4]:
                 st.markdown(
                     f"""<div style="background:#1e1e2e; border:1px solid #2d2d3d;
@@ -273,8 +294,6 @@ else:
                     st.rerun()
                 except Exception:
                     st.error("Delete failed")
-        with info_col:
-            pass
 
         st.markdown(
             f"""<div style="background:#1a1a2e; border:1px solid #2d2d3d;
