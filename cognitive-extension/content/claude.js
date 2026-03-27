@@ -1,109 +1,86 @@
-// content/claude.js
+// cognitive-extension/content/claude.js
 (function () {
+  console.log("[Cognitive] ✅ Claude content script loaded");
+
   let lastMessageCount = 0;
-  let isContextValid = true;
+  let isInitialized = false;
 
-  function checkContext() {
-    try {
-      return chrome.runtime && chrome.runtime.id !== undefined;
-    } catch {
-      return false;
-    }
-  }
-
-  // ── Multi-strategy message selector ──────────────────────
-  // Covers: official claude.ai + Chatly wrappers + generic chat UIs
-  function getMessageCount() {
-    const strategies = [
-      // 1. Official claude.ai (most specific)
-      () => document.querySelectorAll('[data-testid="human-turn"]').length,
-
-      // 2. Common Claude wrapper pattern
-      () => document.querySelectorAll('.human-turn').length,
-
-      // 3. Generic user message classes used by Chatly-style wrappers
-      () => document.querySelectorAll('[class*="user-message"]:not([class*="assistant"])').length,
-
-      // 4. Role-based attribute (some wrappers copy ChatGPT's pattern)
-      () => document.querySelectorAll('[data-message-author-role="user"]').length,
-
-      // 5. Paragraph inside user bubble — last resort broad match
-      () => document.querySelectorAll('[class*="human"] p, [class*="user-turn"] p').length,
+  function getUserMessages() {
+    const selectors = [
+      '[data-testid*="user"]',
+      '[class*="user"]',
+      '[data-message-author="human"]',
+      '[data-role="user"]',
+      'div[data-is-streaming="false"]'
     ];
 
-    for (const strategy of strategies) {
+    for (const selector of selectors) {
       try {
-        const count = strategy();
-        if (count > 0) return count;
-      } catch (_) {}
-    }
-    return 0;
-  }
-
-  function countMessages() {
-    if (!isContextValid) return;
-
-    try {
-      const count = getMessageCount();
-
-      if (count > lastMessageCount) {
-        const newCount = count - lastMessageCount;
-        lastMessageCount = count;
-
-        console.log(`[Cognitive] 🧠 Claude: detected ${newCount} new message(s), total: ${count}`);
-
-        for (let i = 0; i < newCount; i++) {
-          if (!checkContext()) {
-            isContextValid = false;
-            observer.disconnect();
-            return;
-          }
-
-          chrome.runtime.sendMessage({
-            type: "MESSAGE_SENT",
-            platform: "Claude"
-          }).catch((error) => {
-            console.log('[Cognitive] Send error:', error?.message);
-            if (error?.message?.includes('Extension context invalidated')) {
-              isContextValid = false;
-              observer.disconnect();
-            }
-          });
+        const nodes = document.querySelectorAll(selector);
+        const filtered = Array.from(nodes).filter(
+          (el) => el.textContent && el.textContent.trim().length > 0
+        );
+        if (filtered.length > 0) {
+          console.log(`[Cognitive] Claude selector matched: ${selector} -> ${filtered.length}`);
+          return filtered;
         }
+      } catch (err) {
+        console.warn(`[Cognitive] Selector failed: ${selector}`, err);
       }
-    } catch (e) {
-      isContextValid = false;
-      observer.disconnect();
-      console.log('[Cognitive] Claude content script error:', e.message);
     }
+
+    return [];
   }
 
-  // ── Observer ──────────────────────────────────────────────
-  const observer = new MutationObserver(() => {
-    if (!isContextValid) {
-      observer.disconnect();
+  function detectMessages() {
+    const userMessages = getUserMessages();
+    const currentCount = userMessages.length;
+
+    console.log(`[Cognitive] Claude user messages: ${currentCount}, last: ${lastMessageCount}`);
+
+    if (!isInitialized) {
+      lastMessageCount = currentCount;
+      isInitialized = true;
+      console.log(`[Cognitive] Claude baseline set to ${currentCount}`);
       return;
     }
-    try {
-      countMessages();
-    } catch (error) {
-      isContextValid = false;
-      observer.disconnect();
+
+    if (currentCount > lastMessageCount) {
+      const newCount = currentCount - lastMessageCount;
+
+      for (let i = 0; i < newCount; i++) {
+        chrome.runtime.sendMessage({
+          type: "MESSAGE_SENT",
+          platform: "Claude"
+        }, (res) => {
+          if (chrome.runtime.lastError) {
+            console.error("[Cognitive] Claude send error:", chrome.runtime.lastError.message);
+          } else {
+            console.log("[Cognitive] Claude MESSAGE_SENT acknowledged:", res);
+          }
+        });
+      }
+
+      lastMessageCount = currentCount;
     }
+  }
+
+  const observer = new MutationObserver(() => {
+    detectMessages();
   });
 
-  // ── Start ─────────────────────────────────────────────────
-  if (checkContext()) {
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
+  function init() {
+    console.log("[Cognitive] 🚀 Claude initializing...");
 
-    // Initial check (for already-loaded conversations)
-    setTimeout(countMessages, 1000);
+    setTimeout(() => {
+      detectMessages();
+      observer.observe(document.body, { childList: true, subtree: true });
+    }, 2500);
+  }
 
-    console.log('[Cognitive] ✅ Claude/Chatly content script loaded on:', window.location.hostname);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
   } else {
-    console.log('[Cognitive] ⚠️ Cannot start — extension context invalid');
+    init();
   }
 })();

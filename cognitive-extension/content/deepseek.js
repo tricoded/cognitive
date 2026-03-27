@@ -1,27 +1,73 @@
-// content/deepseek.js
-(function () {
-  let lastCount = 0;
+// cognitive-extension/content/deepseek.js
+console.log("[Cognitive] ✅ DeepSeek content script loaded");
 
-  function countMessages() {
+let lastMessageCount = 0;
+
+const STRATEGIES = [
+  // Strategy 1: Hash-like class starting with 'fbb'
+  () => document.querySelectorAll('div[class^="fbb"]'),
+  
+  // Strategy 2: Any div with 8-char hex class
+  () => document.querySelectorAll('div[class*="737a4"]'),
+  
+  // Strategy 3: Fallback to main content divs
+  () => document.querySelectorAll('main div[class]'),
+];
+
+function detectMessages() {
+  let allMessages = [];
+  
+  for (let i = 0; i < STRATEGIES.length; i++) {
     try {
-      const msgs = document.querySelectorAll(".ds-message-item");
-      if (msgs.length > lastCount) {
-        const diff = msgs.length - lastCount;
-        lastCount = msgs.length;
-        for (let i = 0; i < diff; i++) {
-          chrome.runtime.sendMessage({ type: "MESSAGE_SENT", platform: "DeepSeek" })
-            .catch(() => observer.disconnect());
+      const found = STRATEGIES[i]();
+      if (found && found.length > 0) {
+        // Filter out non-message divs (length check)
+        allMessages = Array.from(found).filter(el => 
+          el.textContent.trim().length > 5
+        );
+        
+        if (allMessages.length > 0) {
+          console.log(`[Cognitive] ✅ Strategy ${i + 1} found ${allMessages.length} messages`);
+          console.log(`[Cognitive] 📝 First: "${allMessages[0].textContent.slice(0, 50)}..."`);
+          break;
         }
       }
-    } catch (_) {
-      observer.disconnect();
+    } catch (err) {
+      console.warn(`[Cognitive] ⚠️ Strategy ${i + 1} failed:`, err);
     }
   }
 
-  const observer = new MutationObserver(() => {
-    try { countMessages(); } catch (_) { observer.disconnect(); }
-  });
+  if (allMessages.length === 0) {
+    console.log("[Cognitive] ⚠️ No messages found");
+    return;
+  }
 
-  observer.observe(document.body, { childList: true, subtree: true });
-  countMessages();
-})();
+  const userMessages = allMessages.filter((_, idx) => idx % 2 === 0);
+  const currentCount = userMessages.length;
+
+  console.log(`[Cognitive] 📊 Total: ${allMessages.length}, User: ${currentCount}, Last: ${lastMessageCount}`);
+
+  if (currentCount > lastMessageCount) {
+    console.log(`[Cognitive] 💬 NEW MESSAGE! Sending MESSAGE_SENT...`);
+    chrome.runtime.sendMessage({ type: "MESSAGE_SENT" }, (res) => {
+      if (chrome.runtime.lastError) {
+        console.error("[Cognitive] ❌", chrome.runtime.lastError.message);
+      } else {
+        console.log("[Cognitive] ✅ Acknowledged:", res);
+      }
+    });
+    lastMessageCount = currentCount;
+  }
+}
+
+function init() {
+  console.log("[Cognitive] 🚀 DeepSeek initializing...");
+  setTimeout(detectMessages, 2000);
+  setInterval(detectMessages, 2000);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
