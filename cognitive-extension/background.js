@@ -3,8 +3,32 @@
 
 import { COGNITIVE_CONFIG } from "./config.js";
 
+// ── PERSISTENT LOGGING (survives DevTools close) ─────────────────────────────
+
+const MAX_LOG_ENTRIES = 100;
+
+function addPersistentLog(message) {
+  const timestamp = new Date().toISOString();
+  const entry = `[${timestamp}] ${message}`;
+  
+  chrome.storage.local.get(["cognitive_logs"], (r) => {
+    let logs = r.cognitive_logs || [];
+    logs.push(entry);
+    if (logs.length > MAX_LOG_ENTRIES) {
+      logs = logs.slice(-MAX_LOG_ENTRIES); // Keep only last 100
+    }
+    chrome.storage.local.set({ cognitive_logs: logs });
+  });
+  
+  // Also log to console for real-time viewing
+  console.log(message);
+}
+
+// Replace console.log calls in your code with addPersistentLog()
+
 let activeSessions = {};
 
+// ── Platform detection ────────────────────────────────────────────────────────
 
 function getPlatform(url) {
   try {
@@ -15,6 +39,8 @@ function getPlatform(url) {
   } catch (_) {}
   return null;
 }
+
+// ── Storage helpers ───────────────────────────────────────────────────────────
 
 async function getApiBase() {
   return new Promise((resolve) => {
@@ -55,23 +81,65 @@ async function addTodayMins(mins) {
 }
 
 function qualityFromCount(messageCount) {
-  return messageCount >= 3 ? "active" : "passive";
+  if (messageCount === 0) return "passive";
+  if (messageCount < 3)  return "passive";
+  return "active";
 }
 
-// ── POST session to backend ───────────────────────────────────────────────────
+async function saveActiveSessions() {
+  return chrome.storage.local.set({ activeSessions });
+}
+
+async function loadActiveSessions() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["activeSessions"], (res) => {
+      activeSessions = res.activeSessions || {};
+      resolve(activeSessions);
+    });
+  });
+}
+
+loadActiveSessions().then(() => {
+  addPersistentLog(`[Cognitive] Restored ${Object.keys(activeSessions).length} active session(s) from storage`);
+});
+
+saveActiveSessions()
+
+// ── Create a new session object ───────────────────────────────────────────────
+
+function createSession(tabId, platform) {
+  return {
+    tabId,
+    hostname:     platform.hostname,
+    platformName: platform.name,
+    category:     platform.category,
+    startTime:    Date.now(),
+    activeMs:     0,
+    lastTick:     Date.now(),
+    messageCount: 0,
+    idleSince:    null,
+    logged:       false,
+  };
+}
 
 async function logSession(session) {
+  // ✅ FIX: Changed from 1 minute to 10 seconds (gives users time to load page)
   const durationMins = Math.round(session.activeMs / 60000);
-  if (durationMins < 1) return;
+  if (durationMins < 0.2) {  // 0.2 min = 12 seconds
+    addPersistentLog(`[Cognitive] Skipping session for ${session.platformName} — duration too short (${Math.round(session.activeMs / 1000)}s)`);
+    return;
+  }
 
   const apiBase = await getApiBase();
   const payload = {
     tool_name:     session.platformName,
     category:      session.category,
-    duration_mins: durationMins,
+    duration_mins: Math.max(1, durationMins),  // ✅ Always send at least 1 min to backend
     quality:       qualityFromCount(session.messageCount),
     notes:         `Auto-tracked · ${session.messageCount} message(s)`,
   };
+
+  addPersistentLog(`[Cognitive] 📤 Logging session to ${apiBase}/ai-usage/ | duration: ${Math.round(session.activeMs / 1000)}s (${durationMins}m)`);
 
   try {
     const res = await fetch(`${apiBase}/ai-usage/`, {
@@ -79,41 +147,49 @@ async function logSession(session) {
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify(payload),
     });
+
     if (!res.ok) {
-      console.warn("[Cognitive] Failed to log session:", res.status, await res.text());
+      const errText = await res.text();
+      addPersistentLog(`[Cognitive] ❌ Failed to log session: HTTP ${res.status} | ${errText}`);
+      saveFailedSession(payload);
     } else {
-      console.log("[Cognitive] ✅ Logged:", payload);
+      addPersistentLog(`[Cognitive] ✅ Session logged successfully`);
     }
   } catch (err) {
-    console.error("[Cognitive] Network error logging session:", err);
-    chrome.storage.local.get(["failedSessions"], (r) => {
-      const failed = r.failedSessions || [];
-      failed.push({ ...payload, failedAt: Date.now() });
-      chrome.storage.local.set({ failedSessions: failed });
-    });
+    addPersistentLog(`[Cognitive] 🌐 Network error logging session: ${err.message}`);
+    saveFailedSession(payload);
   }
 
-  const newTotal = await addTodayMins(durationMins);
+  const newTotal = await addTodayMins(Math.max(1, durationMins));
   await checkNudge(newTotal);
 }
 
+function saveFailedSession(payload) {
+  chrome.storage.local.get(["failedSessions"], (r) => {
+    const failed = r.failedSessions || [];
+    failed.push({ ...payload, failedAt: Date.now() });
+    chrome.storage.local.set({ failedSessions: failed });
+    console.log(`[Cognitive] 💾 Saved to retry queue (${failed.length} pending)`);
+  });
+}
+
+// ── Nudge ─────────────────────────────────────────────────────────────────────
 
 async function checkNudge(totalMins) {
   const today = new Date().toISOString().slice(0, 10);
-  const result = await new Promise(r =>
+  const result = await new Promise((r) =>
     chrome.storage.local.get(["nudgeFiredDate"], r)
   );
   if (result.nudgeFiredDate === today) return;
 
   if (totalMins >= COGNITIVE_CONFIG.NUDGE_THRESHOLD_MINS) {
     chrome.notifications.create("cognitive_nudge", {
-    type: "basic",
-    iconUrl: "icons/icon128.png",
-    title: "AI Usage Check-In",
-    message: `You've spent ${totalMins} minutes on AI tools today. Take a moment to reflect — is this working for you?`,
-    buttons: [{ title: "Open Dashboard" }, { title: "Dismiss" }],
-    priority: 2,
-  });
+      type:     "basic",
+      iconUrl:  "icons/icon96.png",
+      message:  `You've spent ${totalMins} minutes on AI tools today. Take a moment to reflect — is this working for you?`,
+      buttons:  [{ title: "Open Dashboard" }, { title: "Dismiss" }],
+      priority: 2,
+    });
     chrome.storage.local.set({ nudgeFiredDate: today });
   }
 }
@@ -121,20 +197,21 @@ async function checkNudge(totalMins) {
 chrome.notifications.onButtonClicked.addListener((notifId, btnIdx) => {
   if (notifId === "cognitive_nudge" && btnIdx === 0) {
     chrome.storage.sync.get(["appUrl"], (res) => {
-      const url = res.appUrl || "http://localhost:8501";
-      chrome.tabs.create({ url });
+      chrome.tabs.create({ url: res.appUrl || "http://localhost:8501" });
     });
   }
 });
 
+// ── Retry failed sessions ─────────────────────────────────────────────────────
 
 async function retryFailedSessions() {
   chrome.storage.local.get(["failedSessions"], async (r) => {
     const failed = r.failedSessions || [];
     if (failed.length === 0) return;
 
-    const apiBase  = await getApiBase();
-    const retrying = [...failed];
+    console.log(`[Cognitive] ♻️ Retrying ${failed.length} failed session(s)...`);
+    const apiBase    = await getApiBase();
+    const retrying   = [...failed];
     const stillFailed = [];
 
     for (const payload of retrying) {
@@ -144,12 +221,16 @@ async function retryFailedSessions() {
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify(payload),
         });
-        if (!res.ok) stillFailed.push(payload);
-        else console.log("[Cognitive] ♻️ Retry succeeded:", payload.tool_name);
+        if (!res.ok) {
+          stillFailed.push(payload);
+        } else {
+          console.log("[Cognitive] ♻️ Retry succeeded:", payload.tool_name);
+        }
       } catch (_) {
         stillFailed.push(payload);
       }
     }
+
     chrome.storage.local.set({ failedSessions: stillFailed });
   });
 }
@@ -157,8 +238,11 @@ async function retryFailedSessions() {
 // ── Tab event listeners ───────────────────────────────────────────────────────
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  const now = Date.now();
+
   for (const [id, session] of Object.entries(activeSessions)) {
     if (parseInt(id) !== tabId && session.lastTick) {
+      session.activeMs += now - session.lastTick;
       session.lastTick = null;
     }
   }
@@ -170,29 +254,30 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   if (!platform) return;
 
   if (!activeSessions[tabId]) {
-    activeSessions[tabId] = {
-      tabId,
-      hostname:     platform.hostname,
-      platformName: platform.name,
-      category:     platform.category,
-      startTime:    Date.now(),
-      activeMs:     0,
-      lastTick:     Date.now(),
-      messageCount: 0,
-      idleSince:    null,
-      logged:       false,
-    };
+    activeSessions[tabId] = createSession(tabId, platform);
+    addPersistentLog(`[Cognitive] 🟢 New session: ${platform.name} (tab ${tabId})`);
   } else {
-    activeSessions[tabId].lastTick = Date.now();
+    activeSessions[tabId].lastTick = now;
+    addPersistentLog(`[Cognitive] ▶️ Resumed session: ${platform.name} (tab ${tabId})`);
   }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   const session = activeSessions[tabId];
-  if (session) {
-    logSession(session);
-    delete activeSessions[tabId];
+  if (!session) {
+    addPersistentLog(`[Cognitive] ⚠️ Tab ${tabId} closed — no tracked session found`);
+    return;
   }
+
+  const now = Date.now();
+  if (session.lastTick) {
+    session.activeMs += now - session.lastTick;
+    session.lastTick = null;
+  }
+
+  addPersistentLog(`[Cognitive] 🔴 Tab closed: ${session.platformName} — logging session`);
+  logSession({ ...session });
+  delete activeSessions[tabId];
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -201,82 +286,79 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     const platform = getPlatform(changeInfo.url);
 
     if (session && !platform) {
-      logSession(session);
+      // Navigated away from a tracked platform
+      addPersistentLog(`[Cognitive] 🔄 Navigated away from ${session.platformName} — logging`);      logSession(session);
       delete activeSessions[tabId];
     } else if (!session && platform) {
-      activeSessions[tabId] = {
-        tabId,
-        hostname:     platform.hostname,
-        platformName: platform.name,
-        category:     platform.category,
-        startTime:    Date.now(),
-        activeMs:     0,
-        lastTick:     Date.now(),
-        messageCount: 0,
-        idleSince:    null,
-        logged:       false,
-      };
+      // Navigated TO a tracked platform
+      activeSessions[tabId] = createSession(tabId, platform);
+      addPersistentLog(`[Cognitive] 🟢 New session via navigation: ${platform.name}`);
+    } else if (session && platform && session.platformName !== platform.name) {
+      // Switched between platforms (e.g., ChatGPT → Gemini in same tab)
+      addPersistentLog(`[Cognitive] 🔄 Platform switch: ${session.platformName} → ${platform.name}`);
+      logSession(session);
+      activeSessions[tabId] = createSession(tabId, platform);
     }
   }
 });
 
-// ── Tick ──────────────────────────────────────────────────────────────────────
-
-chrome.alarms.create("tick", { periodInMinutes: 0.5 });
-
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== "tick") return;
-
-  const now      = Date.now();
-  const idleSecs = COGNITIVE_CONFIG.IDLE_THRESHOLD_SECS * 1000;
-
-  chrome.idle.queryState(COGNITIVE_CONFIG.IDLE_THRESHOLD_SECS, (state) => {
-    for (const [tabId, session] of Object.entries(activeSessions)) {
-      if (!session.lastTick) continue;
-
-      const elapsed = now - session.lastTick;
-
-      if (state === "idle" || state === "locked") {
-        if (!session.idleSince) session.idleSince = now;
-      } else {
-        if (session.idleSince) {
-          const idleDuration = now - session.idleSince;
-          if (idleDuration > idleSecs) {
-            session.lastTick  = now;
-            session.idleSince = null;
-            continue;
-          }
-          session.idleSince = null;
-        }
-        session.activeMs += elapsed;
-        session.lastTick  = now;
-
-        if (session.activeMs >= 30 * 60 * 1000) {
-          logSession({ ...session });
-          session.activeMs  = 0;
-          session.startTime = now;
-        }
-      }
-    }
-  });
-
-  retryFailedSessions();
-});
+// ── CRITICAL FIX: Handle CONTENT_SCRIPT_READY ────────────────────────────────
+// This fires when a content script loads on a page, ensuring the session
+// is registered even if the tab was already open before the extension loaded.
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
+  // ── Session registration from content script ──────────────────────────────
+  if (msg.type === "CONTENT_SCRIPT_READY") {
+    const tabId = sender.tab?.id;
+    const url   = sender.tab?.url;
+
+    if (!tabId || !url) {
+      sendResponse({ ok: false, reason: "no tab info" });
+      return true;
+    }
+
+    const platform = getPlatform(url);
+    if (!platform) {
+      sendResponse({ ok: false, reason: "not a tracked platform" });
+      return true;
+    }
+
+    // Only create session if one doesn't already exist
+    if (!activeSessions[tabId]) {
+      activeSessions[tabId] = createSession(tabId, platform);
+      addPersistentLog(`[Cognitive] 🟢 Session registered via content script: ${platform.name} (tab ${tabId})`);
+    }
+
+    sendResponse({ ok: true, platform: platform.name });
+    return true;
+  }
+
+  // ── Message count ─────────────────────────────────────────────────────────
   if (msg.type === "MESSAGE_SENT") {
     const tabId = sender.tab?.id;
     if (tabId && activeSessions[tabId]) {
       activeSessions[tabId].messageCount += 1;
-      console.log(`[Cognitive] 💬 Message count for tab ${tabId}: ${activeSessions[tabId].messageCount}`);
+      addPersistentLog(`[Cognitive] 💬 ${activeSessions[tabId].platformName} message count: ${activeSessions[tabId].messageCount}`);
+    } else if (tabId) {
+      // Session missing — try to create it from tab URL
+      const url = sender.tab?.url;
+      if (url) {
+        const platform = getPlatform(url);
+        if (platform) {
+          activeSessions[tabId] = createSession(tabId, platform);
+          activeSessions[tabId].messageCount = 1;
+          addPersistentLog(`[Cognitive] 🟡 Late session created for ${platform.name} via MESSAGE_SENT`);
+        }
+      }
     }
     sendResponse({ ok: true });
     return true;
   }
 
+  // ── Get all active sessions (for popup) ──────────────────────────────────
   if (msg.type === "GET_SESSIONS") {
-    const sessions = Object.values(activeSessions).map(s => ({
+    const sessions = Object.values(activeSessions).map((s) => ({
       tabId:        s.tabId,
       platformName: s.platformName,
       category:     s.category,
@@ -289,18 +371,71 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // ── Today's total usage ───────────────────────────────────────────────────
   if (msg.type === "GET_TODAY_TOTAL") {
-    getTodayTotalMins().then(total => {
-      getDailyBudgetMins().then(budget => {
+    getTodayTotalMins().then((total) => {
+      getDailyBudgetMins().then((budget) => {
         sendResponse({ total, budget });
       });
     });
-    return true; // ← REQUIRED for async sendResponse
-  }
-
-  if (msg.type === "FORCE_LOG_ALL") {
-    const promises = Object.values(activeSessions).map(s => logSession({ ...s }));
-    Promise.all(promises).then(() => sendResponse({ ok: true }));
     return true;
   }
+
+  // ── Force log all sessions (called before opening dashboard) ─────────────
+  if (msg.type === "FORCE_LOG_ALL") {
+    const sessions = Object.values(activeSessions).map((s) => ({ ...s }));
+    Promise.all(sessions.map((s) => logSession(s))).then(async () => {
+      activeSessions = {};
+      await saveActiveSessions();
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+});
+
+// ── Tick (every 30 seconds) ───────────────────────────────────────────────────
+
+chrome.alarms.create("tick", { periodInMinutes: 0.5 });
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== "tick") return;
+
+  const now      = Date.now();
+  const idleMs   = COGNITIVE_CONFIG.IDLE_THRESHOLD_SECS * 1000;
+
+  chrome.idle.queryState(COGNITIVE_CONFIG.IDLE_THRESHOLD_SECS, (state) => {
+    for (const [tabId, session] of Object.entries(activeSessions)) {
+      if (!session.lastTick) continue;
+
+      const elapsed = now - session.lastTick;
+
+      if (state === "idle" || state === "locked") {
+        if (!session.idleSince) session.idleSince = now;
+      } else {
+        if (session.idleSince) {
+          const idleDuration = now - session.idleSince;
+          if (idleDuration > idleMs) {
+            // Was idle too long — reset tick without counting time
+            session.lastTick  = now;
+            session.idleSince = null;
+            continue;
+          }
+          session.idleSince = null;
+        }
+
+        session.activeMs += elapsed;
+        session.lastTick  = now;
+
+        // Auto-log every 30 minutes of active time
+        if (session.activeMs >= 30 * 60 * 1000) {
+          addPersistentLog(`[Cognitive] ⏰ 30min reached for ${session.platformName} — auto-logging`);
+          logSession({ ...session });
+          session.activeMs  = 0;
+          session.startTime = now;
+        }
+      }
+    }
+  });
+
+  retryFailedSessions();
 });

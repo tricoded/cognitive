@@ -1,13 +1,8 @@
-// popup/popup.js
-// Connects to background.js via chrome.runtime.sendMessage
+// popup/popup.js — Clean version, no openTracker reference
 
 const STREAMLIT_FALLBACK = "http://localhost:8501";
 
-// ── Elements ──────────────────────────────────────────────────────────────────
-// NOTE: Every element is fetched with getElementById — if it doesn't exist in
-// the HTML, it returns null. We guard ALL event listeners with ?. so a missing
-// element NEVER crashes the script and breaks sessions rendering.
-
+// ── Elements — all fetched safely ────────────────────────────────────────────
 const statusDot        = document.getElementById("statusDot");
 const budgetValue      = document.getElementById("budgetValue");
 const barFill          = document.getElementById("barFill");
@@ -18,7 +13,8 @@ const refreshBtn       = document.getElementById("refreshBtn");
 const lastUpdated      = document.getElementById("lastUpdated");
 const overBudgetBanner = document.getElementById("overBudgetBanner");
 const openDashboard    = document.getElementById("openDashboard");
-// openTracker is GONE from HTML — we no longer reference it at all ✅
+const openOptions      = document.getElementById("openOptions");
+// ✅ openTracker is COMPLETELY REMOVED — was causing script crash
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -49,56 +45,62 @@ function platformIcon(name) {
 // ── Render sessions ───────────────────────────────────────────────────────────
 
 function renderSessions(sessions) {
-  if (!sessionsList) return; // guard: element must exist
+  if (!sessionsList) return;
 
   if (!sessions || sessions.length === 0) {
     sessionsList.innerHTML = `
       <div class="empty">
         <div class="empty-icon">😴</div>
         <div>No AI tools open right now</div>
+        <div style="font-size:9px; margin-top:4px; color:var(--muted);">
+          Open ChatGPT, Gemini, or Claude to start tracking
+        </div>
       </div>`;
     if (statusDot) statusDot.className = "status-dot";
     return;
   }
 
-  const activeSessions = sessions.filter(s => s.isActive);
+  const activeSessions = sessions.filter((s) => s.isActive);
   if (statusDot) {
-    statusDot.className = activeSessions.length > 0
-      ? "status-dot active"
-      : "status-dot";
+    statusDot.className =
+      activeSessions.length > 0 ? "status-dot active" : "status-dot";
   }
 
-  sessionsList.innerHTML = sessions.map(session => {
-    const icon    = platformIcon(session.platformName);
-    const timeStr = formatMs(session.activeMs);
-    const isActive = session.isActive;
-    // Category badge — comes from config.js via background.js automatically
-    const category = session.category || "chatbot";
+  sessionsList.innerHTML = sessions
+    .map((session) => {
+      const icon     = platformIcon(session.platformName);
+      const timeStr  = formatMs(session.activeMs);
+      const isActive = session.isActive;
+      const category = session.category || "AI Tool";
 
-    return `
-      <div class="session-card ${isActive ? "active-tab" : ""}">
-        <div>
-          <div class="session-name">${icon} ${session.platformName}</div>
-          <div class="badges">
-            <span class="cat-badge">${category}</span>
-            <span class="msg-badge">💬 ${session.messageCount} msg${session.messageCount !== 1 ? "s" : ""}</span>
+      return `
+        <div class="session-card ${isActive ? "active-tab" : ""}">
+          <div>
+            <div class="session-name">${icon} ${session.platformName}</div>
+            <div class="badges">
+              <span class="cat-badge">${category}</span>
+              <span class="msg-badge">
+                💬 ${session.messageCount} msg${session.messageCount !== 1 ? "s" : ""}
+              </span>
+            </div>
           </div>
-        </div>
-        <div style="text-align:right;">
-          <div class="session-time">${timeStr}</div>
-          ${isActive
-            ? `<div style="font-size:9px; color:var(--accent2); margin-top:2px;">● LIVE</div>`
-            : `<div style="font-size:9px; color:var(--muted); margin-top:2px;">paused</div>`
-          }
-        </div>
-      </div>`;
-  }).join("");
+          <div style="text-align:right;">
+            <div class="session-time">${timeStr}</div>
+            ${
+              isActive
+                ? `<div style="font-size:9px; color:var(--accent2); margin-top:2px;">● LIVE</div>`
+                : `<div style="font-size:9px; color:var(--muted); margin-top:2px;">paused</div>`
+            }
+          </div>
+        </div>`;
+    })
+    .join("");
 }
 
 // ── Render budget ─────────────────────────────────────────────────────────────
 
 function renderBudget(totalMins, budgetMins) {
-  if (!budgetValue || !barFill || !budgetPct || !budgetLeft) return; // guard
+  if (!budgetValue || !barFill || !budgetPct || !budgetLeft) return;
 
   const pct       = Math.min((totalMins / budgetMins) * 100, 100);
   const remaining = budgetMins - totalMins;
@@ -109,7 +111,9 @@ function renderBudget(totalMins, budgetMins) {
   barFill.style.width      = `${pct}%`;
   barFill.style.background = over
     ? "var(--danger)"
-    : pct >= 80 ? "var(--warn)" : "var(--accent2)";
+    : pct >= 80
+    ? "var(--warn)"
+    : "var(--accent2)";
 
   budgetPct.textContent  = `${pct.toFixed(0)}%`;
   budgetLeft.textContent = over
@@ -117,7 +121,9 @@ function renderBudget(totalMins, budgetMins) {
     : `${remaining}min remaining`;
   budgetLeft.style.color = over
     ? "var(--danger)"
-    : pct >= 80 ? "var(--warn)" : "var(--muted)";
+    : pct >= 80
+    ? "var(--warn)"
+    : "var(--muted)";
 
   if (statusDot) {
     if (over) {
@@ -134,27 +140,28 @@ function renderBudget(totalMins, budgetMins) {
   }
 }
 
-// ── Main fetch & render ───────────────────────────────────────────────────────
+// ── Main refresh ──────────────────────────────────────────────────────────────
 
 async function refresh() {
   if (refreshBtn) refreshBtn.classList.add("spinning");
 
   try {
-    // 1. Sessions
+    // 1. Sessions from background service worker
     const sessionRes = await chrome.runtime.sendMessage({ type: "GET_SESSIONS" });
     renderSessions(sessionRes?.sessions || []);
 
-    // 2. Budget
+    // 2. Today's budget from background
     const todayRes = await chrome.runtime.sendMessage({ type: "GET_TODAY_TOTAL" });
-    const total    = todayRes?.total  ?? 0;
-    const budget   = todayRes?.budget ?? 120;
-    renderBudget(total, budget);
+    renderBudget(todayRes?.total ?? 0, todayRes?.budget ?? 120);
 
     if (lastUpdated) lastUpdated.textContent = `Updated ${formatTime(new Date())}`;
   } catch (err) {
     console.error("[Popup] Refresh error:", err);
     if (sessionsList) {
-      sessionsList.innerHTML = `<div class="empty"><div>⚠️ Could not reach extension background</div></div>`;
+      sessionsList.innerHTML = `
+        <div class="empty">
+          <div>⚠️ Extension error — try reloading</div>
+        </div>`;
     }
     if (lastUpdated) lastUpdated.textContent = "Update failed";
   }
@@ -164,19 +171,28 @@ async function refresh() {
   }, 500);
 }
 
-// ── Button actions ────────────────────────────────────────────────────────────
+// ── Button events — all guarded with ?. ──────────────────────────────────────
 
-// Guard with ?. — if button doesn't exist in HTML, this is a no-op, not a crash
 openDashboard?.addEventListener("click", async () => {
+  // Force-log all sessions before opening dashboard so data is fresh
+  try {
+    await chrome.runtime.sendMessage({ type: "FORCE_LOG_ALL" });
+    await new Promise((r) => setTimeout(r, 600)); // wait for POST to complete
+  } catch (_) {}
+
   const res = await chrome.storage.sync.get(["appUrl"]);
-  const url = res.appUrl || STREAMLIT_FALLBACK;
-  chrome.tabs.create({ url });
+  chrome.tabs.create({ url: res.appUrl || STREAMLIT_FALLBACK });
+  window.close();
+});
+
+openOptions?.addEventListener("click", () => {
+  chrome.runtime.openOptionsPage();
   window.close();
 });
 
 refreshBtn?.addEventListener("click", () => refresh());
 
-// ── Auto-refresh every 5 seconds ─────────────────────────────────────────────
+// ── Auto-refresh every 5s while popup open ────────────────────────────────────
 refresh();
 const interval = setInterval(refresh, 5000);
 window.addEventListener("unload", () => clearInterval(interval));

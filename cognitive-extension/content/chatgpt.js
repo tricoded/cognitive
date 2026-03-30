@@ -18,37 +18,44 @@
 
     try {
       const msgs = document.querySelectorAll('[data-message-author-role="user"]');
+
       if (msgs.length > lastMessageCount) {
         const newCount = msgs.length - lastMessageCount;
         lastMessageCount = msgs.length;
-        
+
         for (let i = 0; i < newCount; i++) {
           // Check context before sending message
           if (!checkContext()) {
             isContextValid = false;
             observer.disconnect();
-            console.log('[Cognitive] Extension context invalidated - stopping observer');
+            console.log(
+              "[Cognitive] Extension context invalidated - stopping observer"
+            );
             return;
           }
 
-          chrome.runtime.sendMessage({ 
-            type: "MESSAGE_SENT", 
-            platform: "ChatGPT" 
-          }).catch((error) => {
-            // Extension context invalidated — stop observing
-            if (error.message && error.message.includes('Extension context invalidated')) {
-              isContextValid = false;
-              observer.disconnect();
-              console.log('[Cognitive] Extension reloaded - content script stopped');
-            }
-          });
+          chrome.runtime
+            .sendMessage({ type: "MESSAGE_SENT", platform: "ChatGPT" })
+            .catch((error) => {
+              // Extension context invalidated — stop observing
+              if (
+                error.message &&
+                error.message.includes("Extension context invalidated")
+              ) {
+                isContextValid = false;
+                observer.disconnect();
+                console.log(
+                  "[Cognitive] Extension reloaded - content script stopped"
+                );
+              }
+            });
         }
       }
     } catch (e) {
       // Extension reloaded mid-session — gracefully stop
       isContextValid = false;
       observer.disconnect();
-      console.log('[Cognitive] Error in countMessages:', e.message);
+      console.log("[Cognitive] Error in countMessages:", e.message);
     }
   }
 
@@ -57,13 +64,12 @@
       observer.disconnect();
       return;
     }
-
     try {
       countMessages();
     } catch (error) {
       isContextValid = false;
       observer.disconnect();
-      console.log('[Cognitive] Observer error:', error.message);
+      console.log("[Cognitive] Observer error:", error.message);
     }
   });
 
@@ -72,6 +78,6 @@
     observer.observe(document.body, { childList: true, subtree: true });
     countMessages();
   } else {
-    console.log('[Cognitive] Cannot start - extension context invalid');
+    console.log("[Cognitive] Cannot start - extension context invalid");
   }
 })();

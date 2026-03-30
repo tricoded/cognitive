@@ -21,7 +21,14 @@ class AIUsageCreate(BaseModel):
 
 @router.post("/", status_code=201)
 def create_log(data: AIUsageCreate, db: Session = Depends(get_db)):
-    log = AIUsageLog(**data.model_dump())
+    log = AIUsageLog(
+        tool_name=data.tool_name,
+        category=data.category,
+        duration_mins=data.duration_mins,
+        quality=data.quality,
+        notes=data.notes,
+        used_at=datetime.utcnow()  # ← EXPLICITLY SET THIS
+    )
     db.add(log)
     db.commit()
     db.refresh(log)
@@ -110,4 +117,4 @@ def delete_log(log_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Log not found")
     db.delete(log)
     db.commit()
-    return {"message": f"Log {log_id} deleted"}
+    return {"message": f"Log {log_id} deleted"} 

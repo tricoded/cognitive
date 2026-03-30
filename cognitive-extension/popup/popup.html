@@ -36,7 +36,7 @@
       overflow-x: hidden;
     }
 
-    /* ── Header ── */
+    /* ── Header ───────────────────────────────────────── */
     .header {
       display: flex;
       align-items: center;
@@ -45,11 +45,7 @@
       border-bottom: 1px solid var(--border);
       background: var(--surface);
     }
-    .header-left {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
+    .header-left { display: flex; align-items: center; gap: 8px; }
     .logo {
       width: 28px; height: 28px;
       background: linear-gradient(135deg, var(--accent), #a78bfa);
@@ -67,24 +63,10 @@
       letter-spacing: 0.5px; text-transform: uppercase;
     }
 
-    /* ── Auto pill ── */
-    .auto-pill {
-      background: rgba(16,185,129,0.12);
-      border: 1px solid rgba(16,185,129,0.3);
-      color: var(--accent2);
-      font-size: 8px;
-      font-family: var(--mono);
-      padding: 2px 6px;
-      border-radius: 99px;
-      letter-spacing: 0.8px;
-      text-transform: uppercase;
-    }
-
-    /* ── Status dot ── */
+    /* ── Status dot ──────────────────────────────────── */
     .status-dot {
       width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--muted);
+      border-radius: 50%; background: var(--muted);
       transition: background 0.3s;
     }
     .status-dot.active {
@@ -94,22 +76,18 @@
     }
     .status-dot.warn   { background: var(--warn); }
     .status-dot.danger { background: var(--danger); }
-
     @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0.4; }
+      0%, 100% { opacity: 1; } 50% { opacity: 0.4; }
     }
 
-    /* ── Budget bar ── */
+    /* ── Budget bar ──────────────────────────────────── */
     .budget-section {
       padding: 12px 16px 10px;
       border-bottom: 1px solid var(--border);
     }
     .budget-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      margin-bottom: 6px;
+      display: flex; justify-content: space-between;
+      align-items: baseline; margin-bottom: 6px;
     }
     .budget-label {
       font-size: 10px; color: var(--muted);
@@ -138,7 +116,7 @@
       margin-top: 5px; font-size: 10px; color: var(--muted);
     }
 
-    /* ── Active sessions ── */
+    /* ── Active sessions ─────────────────────────────── */
     .section {
       padding: 10px 16px;
       border-bottom: 1px solid var(--border);
@@ -152,12 +130,10 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-left: 3px solid var(--accent);
-      border-radius: 8px;
-      padding: 8px 10px;
+      border-radius: 8px; padding: 8px 10px;
       margin-bottom: 6px;
       display: flex; align-items: center;
-      justify-content: space-between;
-      gap: 8px;
+      justify-content: space-between; gap: 8px;
       animation: slideIn 0.3s ease;
     }
     @keyframes slideIn {
@@ -172,8 +148,16 @@
       font-family: var(--display);
       font-weight: 600; font-size: 12px; color: var(--text);
     }
-    .session-meta {
-      font-size: 10px; color: var(--muted); margin-top: 1px;
+    .badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+    .cat-badge {
+      background: rgba(124, 106, 247, 0.15);
+      color: var(--accent);
+      font-size: 9px; padding: 1px 6px;
+      border-radius: 99px; border: 1px solid rgba(124, 106, 247, 0.3);
+    }
+    .msg-badge {
+      background: var(--border); color: var(--muted);
+      font-size: 9px; padding: 1px 5px; border-radius: 99px;
     }
     .session-time {
       font-family: var(--display);
@@ -181,99 +165,51 @@
       color: var(--accent); white-space: nowrap;
     }
     .session-card.active-tab .session-time { color: var(--accent2); }
-    .badges { display: flex; gap: 4px; margin-top: 3px; flex-wrap: wrap; }
-    .msg-badge {
-      background: var(--border); color: var(--muted);
-      font-size: 9px; padding: 1px 5px;
-      border-radius: 99px; display: inline-block;
-    }
-    .cat-badge {
-      background: rgba(124,106,247,0.15);
-      border: 1px solid rgba(124,106,247,0.3);
-      color: var(--accent);
-      font-size: 9px; padding: 1px 5px;
-      border-radius: 99px; display: inline-block;
-    }
 
-    /* ── Auto-log info strip ── */
-    .info-strip {
-      margin: 0 16px 8px;
-      background: rgba(16,185,129,0.06);
-      border: 1px solid rgba(16,185,129,0.15);
-      border-radius: 8px;
-      padding: 6px 10px;
-      font-size: 9px;
-      color: var(--muted);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      letter-spacing: 0.3px;
-    }
-    .info-strip .dot {
-      width: 5px; height: 5px;
-      border-radius: 50%;
-      background: var(--accent2);
-      flex-shrink: 0;
-      animation: pulse 2s infinite;
-    }
-
-    /* ── Empty state ── */
+    /* ── Empty state ─────────────────────────────────── */
     .empty {
       text-align: center; padding: 10px 0;
       color: var(--muted); font-size: 11px;
     }
     .empty-icon { font-size: 22px; margin-bottom: 4px; }
 
-    /* ── Action buttons ── */
+    /* ── Action buttons ──────────────────────────────── */
     .actions {
+      display: flex; gap: 8px;
       padding: 10px 16px 12px;
     }
     .btn {
-      width: 100%;
-      padding: 9px 0;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text);
-      font-family: var(--mono);
-      font-size: 11px;
-      cursor: pointer;
-      text-align: center;
+      flex: 1; padding: 7px 0;
+      border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text);
+      font-family: var(--mono); font-size: 11px;
+      cursor: pointer; text-align: center;
       transition: all 0.15s;
       display: flex; align-items: center;
       justify-content: center; gap: 4px;
-      text-decoration: none;
     }
     .btn:hover {
       background: var(--border);
-      border-color: var(--accent);
-      color: var(--accent);
+      border-color: var(--accent); color: var(--accent);
     }
     .btn-primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-      font-family: var(--display);
-      font-weight: 700; font-size: 12px;
+      background: var(--accent); border-color: var(--accent);
+      color: #fff; font-family: var(--display);
+      font-weight: 700; font-size: 11px;
     }
     .btn-primary:hover {
-      background: #6a58e8;
-      border-color: #6a58e8;
-      color: #fff;
+      background: #6a58e8; border-color: #6a58e8; color: #fff;
     }
 
-    /* ── Footer ── */
+    /* ── Footer ──────────────────────────────────────── */
     .footer {
       padding: 6px 16px 10px;
       display: flex; justify-content: space-between; align-items: center;
     }
-    .footer-status {
-      font-size: 9px; color: var(--muted); letter-spacing: 0.3px;
-    }
+    .footer-status { font-size: 9px; color: var(--muted); letter-spacing: 0.3px; }
     .refresh-btn {
-      background: none; border: none;
-      color: var(--muted); font-size: 11px;
-      cursor: pointer; padding: 2px;
+      background: none; border: none; color: var(--muted);
+      font-size: 11px; cursor: pointer; padding: 2px;
       transition: color 0.15s, transform 0.3s;
     }
     .refresh-btn:hover { color: var(--accent); }
@@ -283,10 +219,9 @@
       to   { transform: rotate(360deg); }
     }
 
-    /* ── Skeleton ── */
+    /* ── Skeleton ─────────────────────────────────────── */
     .skeleton {
-      background: var(--border);
-      border-radius: 4px;
+      background: var(--border); border-radius: 4px;
       animation: shimmer 1.2s infinite;
     }
     @keyframes shimmer {
@@ -295,17 +230,30 @@
       100% { opacity: 0.4; }
     }
 
-    /* ── Warning banner ── */
+    /* ── Warning banner ──────────────────────────────── */
     .banner {
       margin: 0 16px 8px;
-      background: #2a1a0f;
-      border: 1px solid var(--warn);
-      border-radius: 8px;
-      padding: 7px 10px;
+      background: #2a1a0f; border: 1px solid var(--warn);
+      border-radius: 8px; padding: 7px 10px;
       font-size: 10px; color: var(--warn);
       display: none; align-items: center; gap: 6px;
     }
     .banner.visible { display: flex; }
+
+    /* ── Auto-log indicator ──────────────────────────── */
+    .auto-log-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      border-radius: 99px; padding: 2px 8px;
+      font-size: 9px; color: var(--accent2);
+      margin: 0 16px 8px;
+    }
+    .auto-log-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%; background: var(--accent2);
+      animation: pulse 2s infinite;
+    }
   </style>
 </head>
 <body>
@@ -320,10 +268,15 @@
       </div>
     </div>
     <div style="display:flex; align-items:center; gap:8px;">
-      <span class="auto-pill">AUTO</span>
       <div id="statusDot" class="status-dot"></div>
       <button class="refresh-btn" id="refreshBtn" title="Refresh">↻</button>
     </div>
+  </div>
+
+  <!-- Auto-log status pill -->
+  <div class="auto-log-pill">
+    <div class="auto-log-dot"></div>
+    Auto-logging active — sessions saved on close
   </div>
 
   <!-- Budget bar -->
@@ -346,12 +299,6 @@
     ⚠️ You've exceeded your daily AI budget!
   </div>
 
-  <!-- Auto-log info strip -->
-  <div class="info-strip">
-    <div class="dot"></div>
-    Sessions logged automatically when you close or switch tabs
-  </div>
-
   <!-- Active Sessions -->
   <div class="section">
     <div class="section-label">🟢 Active Sessions</div>
@@ -360,9 +307,10 @@
     </div>
   </div>
 
-  <!-- Actions — Dashboard only -->
+  <!-- Actions — only Dashboard button, NO openTracker -->
   <div class="actions">
     <button class="btn btn-primary" id="openDashboard">📊 Open Dashboard</button>
+    <button class="btn" id="openOptions">⚙️ Settings</button>
   </div>
 
   <!-- Footer -->
