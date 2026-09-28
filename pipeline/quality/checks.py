@@ -24,7 +24,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from pyspark.sql import functions as F
 
 EXPECTED_FIELDS = {
     "event_id", "user_id", "device_id", "platform", "event_type", "event_ts", "client_ts",
@@ -82,6 +81,9 @@ def check_schema(raw_root: Path, dts: list[str], sample_lines: int = 500) -> lis
 
 
 def check_ods(wh, start: str, end: str) -> tuple[list[Alert], pd.DataFrame]:
+    # Imported here so the pure-Python checks (schema, PSI) work without PySpark
+    from pyspark.sql import functions as F
+
     ods = wh.read("ods_ai_events", start, end)
 
     per_dt = ods.groupBy("dt").agg(
