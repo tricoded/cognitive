@@ -35,7 +35,7 @@
           }
 
           chrome.runtime
-            .sendMessage({ type: "MESSAGE_SENT", platform: "ChatGPT" })
+            .sendMessage({ type: "MESSAGE_SENT", platform: "ChatGPT", features: window.__cognitivePromptFeatures?.(msgs[msgs.length - newCount + i]?.innerText) })
             .catch((error) => {
               // Extension context invalidated — stop observing
               if (

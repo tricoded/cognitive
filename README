@@ -1,8 +1,0 @@
-docker-compose down
-docker-compose up --build
-
-uvicorn app.man:app --reload --port 8000
-
-cd /c/sideprojects/cognitive/frontend
-source ../venv/Scripts/activate
-streamlit run app.py

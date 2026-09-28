@@ -119,6 +119,10 @@ function createSession(tabId, platform) {
     messageCount: 0,
     idleSince:    null,
     logged:       false,
+    sessionId:    "s" + Math.random().toString(16).slice(2, 12),
+    delegationCount: 0,
+    reaskCount:      0,
+    msgTimes:        [],   // timestamps only, for msgs_last_5min
   };
 }
 
@@ -339,6 +343,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const tabId = sender.tab?.id;
     if (tabId && activeSessions[tabId]) {
       activeSessions[tabId].messageCount += 1;
+      recordPromptFeatures(activeSessions[tabId], msg.features);
       addPersistentLog(`[Cognitive] 💬 ${activeSessions[tabId].platformName} message count: ${activeSessions[tabId].messageCount}`);
     } else if (tabId) {
       // Session missing — try to create it from tab URL
@@ -393,6 +398,101 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
+// ── Prompt-level events + real-time decisions ───────────────────────────────
+// Only on-device features arrive here (see content/prompt_features.js);
+// prompt text never reaches the background worker or the API.
+
+const EVENT_QUEUE_MAX = 2000;
+
+async function getDeviceId() {
+  const r = await chrome.storage.local.get(["deviceId"]);
+  if (r.deviceId) return r.deviceId;
+  const id = "d" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  await chrome.storage.local.set({ deviceId: id });
+  return id;
+}
+
+function recordPromptFeatures(session, features) {
+  session.msgTimes = (session.msgTimes || []).filter((t) => Date.now() - t < 5 * 60 * 1000);
+  session.msgTimes.push(Date.now());
+  if (!features) return;
+  if (features.prompt_kind === "delegation") session.delegationCount = (session.delegationCount || 0) + 1;
+  if (features.is_reask) session.reaskCount = (session.reaskCount || 0) + 1;
+  const event = {
+    ...features,
+    platform:    session.platformName,
+    session_id:  session.sessionId,
+    app_version: chrome.runtime.getManifest().version,
+  };
+  chrome.storage.local.get(["eventQueue"], (r) => {
+    const q = (r.eventQueue || []).concat([event]).slice(-EVENT_QUEUE_MAX);
+    chrome.storage.local.set({ eventQueue: q });
+  });
+}
+
+async function flushEvents() {
+  const { eventQueue = [] } = await chrome.storage.local.get(["eventQueue"]);
+  if (eventQueue.length === 0) return;
+  const batch = eventQueue.slice(0, 500);
+  const deviceId = await getDeviceId();
+  try {
+    const res = await fetch(`${await getApiBase()}/ai-usage/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(batch.map((e) => ({ ...e, device_id: deviceId }))),
+    });
+    if (res.ok) {
+      // Server dedups on event_id, so a retry after a lost response is safe.
+      const sent = new Set(batch.map((e) => e.event_id));
+      const { eventQueue: latest = [] } = await chrome.storage.local.get(["eventQueue"]);
+      await chrome.storage.local.set({ eventQueue: latest.filter((e) => !sent.has(e.event_id)) });
+    }
+  } catch (_) { /* offline: keep queue, retry next tick */ }
+}
+
+async function requestDecision(session) {
+  const n = session.messageCount || 0;
+  const payload = {
+    platform:          session.platformName,
+    session_minutes:   session.activeMs / 60000,
+    msgs_in_session:   n,
+    msgs_last_5min:    (session.msgTimes || []).filter((t) => Date.now() - t < 5 * 60 * 1000).length,
+    delegation_share:  n ? (session.delegationCount || 0) / n : 0,
+    reask_share:       n ? (session.reaskCount || 0) / n : 0,
+    local_hour:        new Date().getHours(),
+    today_total_mins:  await getTodayTotalMins(),
+    daily_budget_mins: await getDailyBudgetMins(),
+  };
+  try {
+    const res = await fetch(`${await getApiBase()}/decision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) return;
+    const d = await res.json();
+    if (d.action !== "allow" && d.message) {
+      chrome.notifications.create(`cognitive_decision_${d.decision_id}`, {
+        type:     "basic",
+        iconUrl:  "icons/icon96.png",
+        title:    d.action === "cool_down" ? "Time for a cool-down" : "Cognitive check-in",
+        message:  d.message,
+        buttons:  [{ title: "Open Dashboard" }, { title: "Dismiss" }],
+        priority: d.action === "soft_nudge" ? 1 : 2,
+      });
+      addPersistentLog(`[Cognitive] 🧭 Decision ${d.action} (${d.reasons.join(",")}) variant=${d.variant}`);
+    }
+  } catch (_) { /* API offline: fail open (allow) */ }
+}
+
+chrome.notifications.onButtonClicked.addListener((notifId, btnIdx) => {
+  if (notifId.startsWith("cognitive_decision_") && btnIdx === 0) {
+    chrome.storage.sync.get(["appUrl"], (res) => {
+      chrome.tabs.create({ url: res.appUrl || "http://localhost:8501" });
+    });
+  }
+});
+
 // ── Tick (every 30 seconds) ───────────────────────────────────────────────────
 
 chrome.alarms.create("tick", { periodInMinutes: 0.5 });
@@ -438,4 +538,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   });
 
   retryFailedSessions();
+  flushEvents();
+
+  // Ask the decision engine about each active session, at most once a minute.
+  for (const session of Object.values(activeSessions)) {
+    if (!session.lastTick) continue;
+    if (session.lastDecisionAt && now - session.lastDecisionAt < 60 * 1000) continue;
+    session.lastDecisionAt = now;
+    requestDecision(session);
+  }
 });

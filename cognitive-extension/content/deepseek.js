@@ -49,7 +49,7 @@ function detectMessages() {
 
   if (currentCount > lastMessageCount) {
     console.log(`[Cognitive] 💬 NEW MESSAGE! Sending MESSAGE_SENT...`);
-    chrome.runtime.sendMessage({ type: "MESSAGE_SENT" }, (res) => {
+    chrome.runtime.sendMessage({ type: "MESSAGE_SENT", platform: "DeepSeek", features: window.__cognitivePromptFeatures?.(userMessages[currentCount - 1]?.textContent) }, (res) => {
       if (chrome.runtime.lastError) {
         console.error("[Cognitive] ❌", chrome.runtime.lastError.message);
       } else {

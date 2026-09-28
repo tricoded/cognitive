@@ -6,7 +6,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.models import AIUsageLog
+from app.models import AIUsageEvent, AIUsageLog
 
 router = APIRouter(prefix="/ai-usage", tags=["AI Usage"])
 
@@ -118,3 +118,48 @@ def delete_log(log_id: int, db: Session = Depends(get_db)):
     db.delete(log)
     db.commit()
     return {"message": f"Log {log_id} deleted"} 
+
+# ── Prompt-level events (on-device features only, no prompt text) ─────────────
+
+class AIUsageEventIn(BaseModel):
+    event_id:    str
+    platform:    str
+    client_ts:   Optional[datetime] = None
+    tz_offset:   int = 0
+    device_id:   Optional[str] = None
+    session_id:  Optional[str] = None
+    msg_len:     Optional[int] = None
+    has_code:    bool = False
+    is_question: bool = False
+    is_reask:    bool = False
+    prompt_kind: Optional[str] = None
+    app_version: Optional[str] = None
+
+
+@router.post("/events", status_code=202)
+def ingest_events(events: list[AIUsageEventIn], db: Session = Depends(get_db)):
+    """
+    Batch ingest from the extension. Idempotent on event_id: the extension
+    retries failed batches, and a retry must not double-count (this exact bug
+    is one of the incidents the warehouse DQ layer detects).
+    """
+    if len(events) > 500:
+        raise HTTPException(413, "max 500 events per batch")
+    ids = [e.event_id for e in events]
+    existing = {r[0] for r in db.query(AIUsageEvent.event_id).filter(AIUsageEvent.event_id.in_(ids)).all()}
+    now = datetime.utcnow()
+    new = []
+    for e in events:
+        if e.event_id in existing:
+            continue
+        existing.add(e.event_id)
+        new.append(AIUsageEvent(
+            event_id=e.event_id, platform=e.platform, event_ts=now,
+            client_ts=e.client_ts.replace(tzinfo=None) if e.client_ts else None,
+            tz_offset=e.tz_offset, device_id=e.device_id, session_id=e.session_id, msg_len=e.msg_len,
+            has_code=int(e.has_code), is_question=int(e.is_question), is_reask=int(e.is_reask),
+            prompt_kind=e.prompt_kind, app_version=e.app_version,
+        ))
+    db.add_all(new)
+    db.commit()
+    return {"accepted": len(new), "duplicates": len(events) - len(new)}

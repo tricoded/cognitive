@@ -7,7 +7,7 @@ from datetime import datetime, date, timedelta
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.models import Task
-from app.ml.task_predictor import TaskDifficultyPredictor
+from app.ml.task_predictor import predictor  # shared singleton (same model as /ml/* routes)
 from app.ml.intent_classifier import intent_clf
 from app.ml.user_patterns import (
     analyze_user_patterns,
@@ -27,8 +27,6 @@ OLLAMA_BASE_URL = (
     else f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
 )
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
-
-predictor = TaskDifficultyPredictor()
 
 PRIORITY_EMOJI = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢", "Overdue": "🚨"}
 STATUS_EMOJI   = {"pending": "⏳", "in_progress": "🔄", "completed": "✅"}
@@ -1475,7 +1473,14 @@ def smart_chat(
     if any(msg_lower == g or msg_lower.startswith(g + " ") for g in GREETINGS):
         return _clean(handle_greeting(db))
 
-    # 3. Intent detection (ML → regex → fuzzy — all in detect_intent now)
+    # 3. Data-analyst and cognitive-audit tools (explicit triggers, checked
+    #    before the task-intent classifier so they aren't misrouted)
+    if DATA_QUESTION_RE.match(msg_stripped):
+        return _clean(handle_data_question(DATA_QUESTION_RE.sub("", msg_stripped, count=1), db))
+    if AUDIT_RE.search(msg_lower):
+        return _clean(handle_cognitive_audit(db))
+
+    # 4. Intent detection (ML → regex → fuzzy — all in detect_intent now)
     intent = detect_intent(msg_lower)
     logger.info(f"[SMART CHAT] intent: {intent} | msg: {msg_stripped[:60]}")
 
@@ -1530,6 +1535,72 @@ def smart_chat(
         "session_update":    {},
         "task_context_used": False,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DATA ANALYST (text-to-SQL over the warehouse) + WEEKLY COGNITIVE AUDIT
+# ══════════════════════════════════════════════════════════════════════════════
+
+DATA_QUESTION_RE = re.compile(r"^\s*(/data|/sql|data:|analyst:|ask data)\s*", re.I)
+AUDIT_RE = re.compile(r"\b(cognitive audit|weekly audit|weekly review|am i (too )?dependent|ai dependency)\b")
+
+
+def handle_data_question(question: str, db: Session) -> dict:
+    from app.analyst.sql_agent import ask
+
+    if not question.strip():
+        return {"reply": "Ask a question about the data, e.g. '/data which platform has the most night-time prompts?'",
+                "intent": "data_question", "action_taken": None, "session_update": {}, "task_context_used": False}
+    out = ask(question)
+    if not out.get("ok"):
+        reply = f"I couldn't answer that: {out.get('error')}"
+    else:
+        tries = len(out["attempts"])
+        reply = f"{out['answer']}\n\nSQL ({tries} attempt{'s' if tries > 1 else ''}):\n{out['sql']}"
+    return {"reply": reply, "intent": "data_question", "action_taken": "sql_query",
+            "session_update": {}, "task_context_used": False, "data": out}
+
+
+def handle_cognitive_audit(db: Session) -> dict:
+    """Weekly review written by the LLM from CDI, nudge outcomes and task history."""
+    from app.decision.bandit import ThompsonBandit
+    from app.decision.store import bandit_history
+    from app.personal_cdi import personal_cdi
+
+    cdi = personal_cdi(db, days=7)
+    prev = personal_cdi(db, days=14)
+    exp = ThompsonBandit.from_history(bandit_history(db), seed=0).posterior()
+    tried = {k: v for k, v in exp.items() if v["trials"] > 0}
+    facts = {
+        "cdi_7d": cdi.get("cdi"), "cdi_14d": prev.get("cdi"), "components": cdi.get("components"),
+        "ai_minutes_7d": cdi.get("ai_minutes"), "tasks_completed_7d": cdi.get("tasks_completed"),
+        "ai_minutes_per_completed_task": cdi.get("ai_minutes_per_completed_task"),
+        "nudge_results": tried,
+    }
+    fallback = (
+        f"Last 7 days: {facts['ai_minutes_7d']} AI minutes, {facts['tasks_completed_7d']} tasks completed"
+        + (f", CDI {facts['cdi_7d']}" if facts["cdi_7d"] is not None else "")
+        + ". " + (f"Best nudge so far: {max(tried, key=lambda k: tried[k]['mean'])}." if tried else "No nudge outcomes yet.")
+    )
+    try:
+        with httpx.Client(timeout=90.0) as client:
+            r = client.post(f"{OLLAMA_BASE_URL}/api/chat", json={
+                "model": OLLAMA_MODEL, "stream": False,
+                "options": {"temperature": 0.4, "num_predict": 260},
+                "messages": [
+                    {"role": "system", "content": "You write a short, honest weekly review of how someone uses AI. "
+                     "Use only the facts given. 4-6 sentences: what the numbers say, whether AI seems to be helping "
+                     "them finish tasks or replacing their own thinking, which nudge worked, one concrete change "
+                     "for next week. CDI is 0-100, higher = more dependent. No markdown."},
+                    {"role": "user", "content": str(facts)},
+                ],
+            })
+            r.raise_for_status()
+            reply = r.json()["message"]["content"].strip()
+    except Exception:
+        reply = fallback
+    return {"reply": reply, "intent": "cognitive_audit", "action_taken": None,
+            "session_update": {}, "task_context_used": True, "data": facts}
 
 
 # ══════════════════════════════════════════════════════════════════════════════

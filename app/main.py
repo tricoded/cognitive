@@ -36,16 +36,16 @@ from app.analytics.productivity import (
     calculate_estimation_accuracy,
     get_time_of_day_category
 )
-from app.ml.task_predictor import TaskDifficultyPredictor
+from app.ml.task_predictor import predictor
+from app.decision.store import record_task_completion
 from app.websocket.manager import manager
 from app.cache.redis_cache import cache
 from app.middleware.rate_limit import limiter, _rate_limit_exceeded_handler, RateLimitExceeded
 from app.schemas import PredictRequest, MLTrainResponse
-from app.routers import ai_usage, tasks
+from app.routers import ai_usage, tasks, decision, risk
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-predictor = TaskDifficultyPredictor()
 
 # ==================== OLLAMA CONFIG ====================
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "ollama")
@@ -122,6 +122,8 @@ app.add_middleware(
 # ==================== ROUTERS (if you have them) ====================
 app.include_router(ai_usage.router)
 app.include_router(tasks.router)
+app.include_router(decision.router)
+app.include_router(risk.router)
 # app.include_router(chat.router)
 # app.include_router(profile.router)
 # app.include_router(notes.router)
@@ -153,10 +155,27 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 # ==================== HEALTH ====================
 @app.get("/health")
 async def health_check():
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {e.__class__.__name__}"
+
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
+        ollama_status = "up" if r.status_code == 200 else f"http {r.status_code}"
+    except Exception:
+        ollama_status = "down"
+
     return {
-        "status": "healthy",
-        "database": "connected",
-        "timestamp": "2026-03-15T06:37:28"
+        "status":    "healthy" if db_status == "connected" else "degraded",
+        "database":  db_status,
+        "ollama":    ollama_status,
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
 # ─── SESSION COMPATIBILITY ROUTES ─────────────────────────
@@ -691,29 +710,13 @@ def complete_task_with_tracking(
     else:
         feedback = f"Off by {abs(100 - accuracy):.0f}%"
 
-        # ── Auto-retrain every 5 completions ────────────────────
-    total_done = db.query(Task).filter(
-        Task.status == "completed",
-        Task.actual_minutes > 0
-    ).count()
+    # Auto-retrain at 5/10/20/every-10 completions (passes ORM rows, which is
+    # what the predictor featurizes)
+    predictor.retrain_if_ready(db)
 
-    if total_done % 5 == 0 and total_done > 0:
-        task_list = [
-            {
-                "estimated_minutes":  t.estimated_minutes,
-                "actual_minutes":     t.actual_minutes,
-                "priority":           t.priority,
-                "category":           t.category,
-                "energy_level_start": t.energy_level_start or 5,
-                "distraction_count":  t.distraction_count or 0,
-            }
-            for t in db.query(Task).filter(
-                Task.status == "completed",
-                Task.actual_minutes > 0
-            ).all()
-        ]
-        predictor.train(task_list)
-    # ────────────────────────────────────────────────────────
+    # Close the loop on any recent nudge: completing a task within 2h counts
+    # as a success for the nudge variant that was shown.
+    record_task_completion(db, task.completed_at)
 
     return {
         "status": "completed",
@@ -739,8 +742,8 @@ class NoteUpdateRequest(BaseModel):
 
 @app.get("/analytics/estimation")
 def estimation_accuracy_report(db: Session = Depends(get_db)):
-    """How good did you ACTUALLY do? (with proof)"""
-    return get_skill_inventory(db)
+    """How good are your time estimates? (estimated vs actual)"""
+    return get_estimation_analytics(db)
 
 # ─── MISSING ANALYTICS ROUTES ─────────────────────────────
 
@@ -909,21 +912,7 @@ async def train_ml_model(db: Session = Depends(get_db)):
         Task.status == "completed",
         Task.actual_minutes > 0
     ).all()
- 
-    task_list = [
-        {
-            "estimated_minutes":  t.estimated_minutes,
-            "actual_minutes":     t.actual_minutes,
-            "priority":           t.priority,
-            "category":           t.category,
-            "energy_level_start": t.energy_level_start or 5,
-            "distraction_count":  t.distraction_count or 0,
-        }
-        for t in tasks
-    ]
- 
-    result = predictor.train(task_list)
-    return result
+    return predictor.train_report(tasks)
  
  
 @app.post("/ml/predict")

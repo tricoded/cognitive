@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Cognitive AI Tracker",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Tracks your AI tool usage and syncs with your Cognitive dashboard",
 
   "permissions": [
@@ -42,7 +42,7 @@
   "content_scripts": [
     {
       "matches": ["https://chatgpt.com/*"],
-      "js": ["content/chatgpt.js"],
+      "js": ["content/prompt_features.js", "content/chatgpt.js"],
       "run_at": "document_idle"
     },
     {
@@ -52,12 +52,12 @@
         "https://app.chatly.ai/*",
         "https://chatlyai.app/*"
       ],
-      "js": ["content/claude.js"],
+      "js": ["content/prompt_features.js", "content/claude.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://gemini.google.com/*"],
-      "js": ["content/gemini.js"],
+      "js": ["content/prompt_features.js", "content/gemini.js"],
       "run_at": "document_idle"
     },
     {
@@ -65,12 +65,12 @@
         "https://www.perplexity.ai/*",
         "https://perplexity.ai/*"
       ],
-      "js": ["content/perplexity.js"],
+      "js": ["content/prompt_features.js", "content/perplexity.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://chat.deepseek.com/*"],
-      "js": ["content/deepseek.js"],
+      "js": ["content/prompt_features.js", "content/deepseek.js"],
       "run_at": "document_end"
     }
   ],
