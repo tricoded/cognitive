@@ -5,7 +5,8 @@ BASE_URL = "http://localhost:8000"
 def health_check() -> dict:
     """Check if API is running"""
     try:
-        response = httpx.get(f"{BASE_URL}/", timeout=5)
+        response = httpx.get(f"{BASE_URL}/health", timeout=5)
+        response.raise_for_status()
         return response.json()
     except Exception as e:
         return {"status": "error", "detail": str(e)}

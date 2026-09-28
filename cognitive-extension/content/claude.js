@@ -51,7 +51,8 @@
       for (let i = 0; i < newCount; i++) {
         chrome.runtime.sendMessage({
           type: "MESSAGE_SENT",
-          platform: "Claude"
+          platform: "Claude",
+          features: window.__cognitivePromptFeatures?.(userMessages[currentCount - newCount + i]?.textContent)
         }, (res) => {
           if (chrome.runtime.lastError) {
             console.error("[Cognitive] Claude send error:", chrome.runtime.lastError.message);

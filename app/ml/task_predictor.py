@@ -2,7 +2,9 @@
 
 import pickle
 import logging
+from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -19,19 +21,32 @@ CATEGORY_MAP = {
     "Finance":     1,
 }
 
+FEATURE_NAMES = [
+    "estimated_minutes",
+    "title_word_count",
+    "priority_score",
+    "category_score",
+    "hour_created",
+    "has_deadline",
+    "days_until_due",
+]
+
 
 class TaskDifficultyPredictor:
     """
     Predicts how long a task will actually take (in minutes).
 
-    Training:  GradientBoostingRegressor on completed tasks with actual_minutes.
-    Fallback:  Returns task.estimated_minutes if not trained, or 60 if neither.
+    Training:   GradientBoostingRegressor on completed tasks with actual_minutes.
+    Evaluation: time-ordered CV (train on earlier completions, test on later),
+                compared against the naive baseline "actual = my own estimate".
+    Fallback:   Returns task.estimated_minutes if not trained, or 60 if neither.
     Auto-trains: After every 5th task completion via retrain_if_ready().
     """
 
     def __init__(self):
-        self.model      = None
-        self.is_trained = False
+        self.model        = None
+        self.is_trained   = False
+        self.last_metrics = {}
         self._load()
 
     # ── Persistence ────────────────────────────────────────────────────
@@ -39,24 +54,31 @@ class TaskDifficultyPredictor:
         if MODEL_PATH.exists():
             try:
                 with open(MODEL_PATH, "rb") as f:
-                    self.model = pickle.load(f)
-                self.is_trained = True
-                logger.info("[Predictor] Model loaded from disk.")
+                    saved = pickle.load(f)
+                # Older pickles stored a bare model with a different feature set.
+                if isinstance(saved, dict) and saved.get("features") == FEATURE_NAMES:
+                    self.model        = saved["model"]
+                    self.last_metrics = saved.get("metrics", {})
+                    self.is_trained   = True
+                    logger.info("[Predictor] Model loaded from disk.")
+                else:
+                    logger.info("[Predictor] Stale model format on disk; will retrain.")
             except Exception as e:
                 logger.warning(f"[Predictor] Failed to load model: {e}")
 
     def _save(self):
         MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(MODEL_PATH, "wb") as f:
-            pickle.dump(self.model, f)
+            pickle.dump({"model": self.model, "features": FEATURE_NAMES, "metrics": self.last_metrics}, f)
 
     # ── Feature Engineering ─────────────────────────────────────────────
     def _featurize(self, task) -> list[float]:
         """
-        Convert a task ORM object into a numeric feature vector.
-        Features: [title_word_count, priority_score, category_score,
-                   hour_created, has_deadline, days_until_due]
+        Convert a task object into a numeric feature vector (see FEATURE_NAMES).
+        The user's own estimate is the strongest signal; the model learns how
+        that estimate is biased for different kinds of task.
         """
+        estimated    = float(task.estimated_minutes or 60)
         title_words  = len((task.title or "").split())
         priority     = PRIORITY_MAP.get(task.priority or "Medium", 3)
         category     = CATEGORY_MAP.get(task.category or "Work", 4)
@@ -66,11 +88,11 @@ class TaskDifficultyPredictor:
         # Days until due (0 if overdue, 30 if no deadline)
         days_until_due = 30
         if task.due_date:
-            from datetime import date
             due = task.due_date.date() if hasattr(task.due_date, "date") else task.due_date
             days_until_due = max(0, (due - date.today()).days)
 
         return [
+            estimated,
             title_words,
             priority,
             category,
@@ -86,8 +108,9 @@ class TaskDifficultyPredictor:
         Returns True if training succeeded, False if not enough data.
         """
         try:
+            from sklearn.base import clone
             from sklearn.ensemble import GradientBoostingRegressor
-            from sklearn.model_selection import cross_val_score
+            from sklearn.model_selection import TimeSeriesSplit
             import numpy as np
         except ImportError:
             logger.error("[Predictor] scikit-learn not installed. Run: pip install scikit-learn")
@@ -103,6 +126,15 @@ class TaskDifficultyPredictor:
             logger.info(f"[Predictor] Not enough data: {len(trainable)}/5 tasks needed.")
             return False
 
+        # Order by completion time so CV folds never train on the future.
+        def _when(t):
+            for attr in ("completed_at", "created_at"):
+                v = getattr(t, attr, None)
+                if isinstance(v, datetime):
+                    return v
+            return datetime.min
+        trainable.sort(key=_when)
+
         X = [self._featurize(t) for t in trainable]
         y = [float(t.actual_minutes) for t in trainable]
 
@@ -114,21 +146,32 @@ class TaskDifficultyPredictor:
             random_state  = 42,
         )
         self.model.fit(X, y)
-        self._save()
         self.is_trained = True
 
-        # Log cross-val MAE if enough data
+        self.last_metrics = {
+            "samples_used": len(trainable),
+            "trained_at":   datetime.utcnow().isoformat(),
+        }
+        # Time-ordered CV vs the "trust my own estimate" baseline
         if len(trainable) >= 10:
-            scores = cross_val_score(
-                self.model, X, y,
-                cv=min(5, len(trainable)),
-                scoring="neg_mean_absolute_error",
+            Xa, ya = np.array(X), np.array(y)
+            tscv = TimeSeriesSplit(n_splits=min(5, len(trainable) // 3))
+            model_err, base_err = [], []
+            for tr, te in tscv.split(Xa):
+                m = clone(self.model).fit(Xa[tr], ya[tr])
+                model_err.append(np.abs(m.predict(Xa[te]) - ya[te]).mean())
+                base_err.append(np.abs(Xa[te, 0] - ya[te]).mean())
+            self.last_metrics["mae_minutes"]          = round(float(np.mean(model_err)), 1)
+            self.last_metrics["baseline_mae_minutes"] = round(float(np.mean(base_err)), 1)
+            logger.info(
+                f"[Predictor] Trained on {len(trainable)} tasks. "
+                f"Time-CV MAE {self.last_metrics['mae_minutes']} min vs own-estimate "
+                f"{self.last_metrics['baseline_mae_minutes']} min"
             )
-            mae = -scores.mean()
-            logger.info(f"[Predictor] Trained on {len(trainable)} tasks. CV MAE: {mae:.1f} min")
         else:
-            logger.info(f"[Predictor] Trained on {len(trainable)} tasks.")
+            logger.info(f"[Predictor] Trained on {len(trainable)} tasks (too few for CV).")
 
+        self._save()
         return True
 
     # ── Prediction ──────────────────────────────────────────────────────
@@ -148,6 +191,55 @@ class TaskDifficultyPredictor:
         except Exception as e:
             logger.warning(f"[Predictor] Prediction failed: {e}")
             return task.estimated_minutes or 60
+
+    predict_single = predict
+
+    # ── API helpers (used by /ml/* routes) ──────────────────────────────
+    def train_report(self, completed_tasks: list) -> dict:
+        if not self.train(completed_tasks):
+            n = len([t for t in completed_tasks if t.actual_minutes and t.actual_minutes > 0])
+            return {"status": "skipped", "ml_enabled": False, "samples_used": n,
+                    "reason": f"Need at least 5 completed tasks with tracked time (have {n})."}
+        return {
+            "status":       "trained",
+            "ml_enabled":   True,
+            "samples_used": self.last_metrics.get("samples_used"),
+            "mae_minutes":  self.last_metrics.get("mae_minutes"),
+            "trained_at":   self.last_metrics.get("trained_at"),
+        }
+
+    def predict_duration(self, fields: dict) -> dict:
+        task = SimpleNamespace(
+            title=fields.get("title", ""),
+            priority=fields.get("priority", "Medium"),
+            category=fields.get("category", "Other"),
+            estimated_minutes=fields.get("estimated_minutes", 60),
+            created_at=datetime.now(),
+            due_date=None,
+        )
+        predicted = self.predict(task)
+        est = task.estimated_minutes or 60
+        diff = predicted - est
+        insight = (
+            "Matches your estimate" if abs(diff) < 5 else
+            f"Likely {abs(diff)} min {'longer' if diff > 0 else 'shorter'} than you estimated"
+        )
+        return {
+            "predicted_minutes":        predicted,
+            "predicted_actual_minutes": predicted,   # key used by /plan/ml
+            "your_estimate":            est,
+            "insight":                  insight,
+            "ml_enabled":               self.is_trained,
+        }
+
+    def get_status(self) -> dict:
+        return {"ml_enabled": self.is_trained, "features": FEATURE_NAMES, **self.last_metrics}
+
+    def get_feature_importance(self) -> Optional[dict]:
+        if not self.is_trained or not hasattr(self.model, "feature_importances_"):
+            return None
+        imp = {n: round(float(v), 4) for n, v in zip(FEATURE_NAMES, self.model.feature_importances_)}
+        return dict(sorted(imp.items(), key=lambda kv: -kv[1]))
 
     # ── Auto-retrain trigger ─────────────────────────────────────────────
     def retrain_if_ready(self, db) -> bool:

@@ -37,7 +37,7 @@
           }
 
           chrome.runtime
-            .sendMessage({ type: "MESSAGE_SENT", platform: "Gemini" })
+            .sendMessage({ type: "MESSAGE_SENT", platform: "Gemini", features: window.__cognitivePromptFeatures?.(msgs[msgs.length - diff + i]?.innerText) })
             .catch((err) => {
               if (
                 err?.message?.includes("Extension context invalidated") ||

@@ -89,3 +89,44 @@ class AIUsageLog(Base):
     notes         = Column(Text,        nullable=True)
     used_at       = Column(DateTime,    default=datetime.utcnow)
     created_at    = Column(DateTime,    default=datetime.utcnow)
+
+
+class AIUsageEvent(Base):
+    """
+    One prompt sent on an AI platform, as reported by the browser extension.
+    Only on-device prompt *features* are stored: the prompt text never
+    leaves the browser. Same schema as the simulator / warehouse ODS layer.
+    """
+    __tablename__ = "ai_usage_events"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    event_id    = Column(String(40), unique=True, index=True, nullable=False)
+    user_id     = Column(String(40), default="me", index=True)
+    device_id   = Column(String(60), nullable=True)
+    platform    = Column(String(40), nullable=False)
+    event_type  = Column(String(30), default="message_sent")
+    event_ts    = Column(DateTime, default=datetime.utcnow, index=True)   # server receive time
+    client_ts   = Column(DateTime, nullable=True)
+    tz_offset   = Column(Integer, default=0)
+    session_id  = Column(String(60), nullable=True)
+    msg_len     = Column(Integer, nullable=True)
+    has_code    = Column(Integer, default=0)
+    is_question = Column(Integer, default=0)
+    is_reask    = Column(Integer, default=0)
+    prompt_kind = Column(String(20), nullable=True)   # "delegation" | "learning"
+    app_version = Column(String(20), nullable=True)
+
+
+class DecisionLog(Base):
+    """Every decision-engine call that led to an intervention, for audit + experiment analysis."""
+    __tablename__ = "decision_logs"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    decided_at = Column(DateTime, default=datetime.utcnow, index=True)
+    platform   = Column(String(40))
+    action     = Column(String(20), nullable=False)      # allow / soft_nudge / hard_nudge / cool_down
+    variant    = Column(String(30), nullable=True)       # which nudge message (bandit arm)
+    reasons    = Column(JSON, default=list)              # strategy reason codes
+    features   = Column(JSON, default=dict)              # snapshot of inputs
+    outcome    = Column(Integer, nullable=True)          # 1 = task completed within 2h, 0 = not, NULL = pending
+    outcome_at = Column(DateTime, nullable=True)
