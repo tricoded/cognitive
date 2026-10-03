@@ -170,3 +170,5 @@ In chat: `/data which platform has the most night-time prompts this week?` or `w
   interventions must be auditable, and reason codes are logged with every decision.
 - **Why a bandit instead of A/B?** With one user and few nudges a day, fixed splits waste most
   impressions on bad variants.
+#   c o g n i t i v e a p p  
+ 

@@ -28,6 +28,7 @@ from app.llm.agent import (
     query_with_memory, 
     auto_archive_completed, 
     daily_priority_refresh,
+    smart_chat,
 )
 from app.analytics.productivity import (
     get_estimation_analytics,
@@ -42,8 +43,7 @@ from app.websocket.manager import manager
 from app.cache.redis_cache import cache
 from app.middleware.rate_limit import limiter, _rate_limit_exceeded_handler, RateLimitExceeded
 from app.schemas import PredictRequest, MLTrainResponse
-from app.routers import ai_usage, tasks, decision, risk
-
+from app.routers import ai_usage, tasks, decision, risk, news
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -124,6 +124,8 @@ app.include_router(ai_usage.router)
 app.include_router(tasks.router)
 app.include_router(decision.router)
 app.include_router(risk.router)
+app.include_router(news.router)
+
 # app.include_router(chat.router)
 # app.include_router(profile.router)
 # app.include_router(notes.router)
@@ -177,6 +179,7 @@ async def health_check():
         "ollama":    ollama_status,
         "timestamp": datetime.utcnow().isoformat(),
     }
+
 
 # ─── SESSION COMPATIBILITY ROUTES ─────────────────────────
 
